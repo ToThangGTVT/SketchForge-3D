@@ -1,12 +1,13 @@
 import { gameMaterialForShape } from "@/lib/gameMaterial";
 import { gameAssetForShape } from "@/lib/gameAsset";
 import type { WorkplaneShape } from "@/types/sketchforge";
+import * as THREE from "three";
 
 export type GlbExportMesh = {
   name: string;
   vertices: readonly (readonly [number, number, number])[];
   faces: readonly (readonly [number, number, number])[];
-  shape: Pick<WorkplaneShape, "color" | "material" | "gameAsset">;
+  shape: Pick<WorkplaneShape, "color" | "material" | "gameAsset" | "paintStrokes" | "height" | "x" | "z" | "elevation" | "rotation" | "rotationX" | "rotationZ" | "mirrorX" | "mirrorY" | "mirrorZ">;
 };
 
 type Accessor = {
@@ -51,6 +52,68 @@ function uvFor(point: readonly number[], normal: readonly number[], scale: reado
   if (ay >= ax && ay >= az) return [x, z] as const;
   if (ax >= az) return [z, y] as const;
   return [x, y] as const;
+}
+
+function paintStrokeWorldFrame(shape: GlbExportMesh["shape"], stroke: NonNullable<WorkplaneShape["paintStrokes"]>[number]) {
+  const rotation = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(shape.rotationX ?? 0),
+    THREE.MathUtils.degToRad(shape.rotation ?? 0),
+    THREE.MathUtils.degToRad(shape.rotationZ ?? 0),
+    "XYZ",
+  ));
+  const point = new THREE.Vector3(
+    stroke.x * (shape.mirrorX ? -1 : 1),
+    stroke.y * (shape.mirrorY ? -1 : 1),
+    stroke.z * (shape.mirrorZ ? -1 : 1),
+  ).applyMatrix4(rotation);
+  point.add(new THREE.Vector3(shape.x, (shape.elevation ?? 0) + shape.height / 2, shape.z));
+  const normal = new THREE.Vector3(
+    stroke.normalX * (shape.mirrorX ? -1 : 1),
+    stroke.normalY * (shape.mirrorY ? -1 : 1),
+    stroke.normalZ * (shape.mirrorZ ? -1 : 1),
+  ).transformDirection(rotation);
+  return { point, normal };
+}
+
+function paintOverlayMeshes(source: GlbExportMesh): GlbExportMesh[] {
+  const groups = new Map<string, { vertices: [number, number, number][]; faces: [number, number, number][] }>();
+  const strokes = source.shape.paintStrokes ?? [];
+  const segments = 18;
+  strokes.forEach((stroke, strokeIndex) => {
+    const { point, normal } = paintStrokeWorldFrame(source.shape, stroke);
+    if (normal.lengthSq() < 0.000001) return;
+    const tangent = (Math.abs(normal.y) < 0.92 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).cross(normal).normalize();
+    const bitangent = normal.clone().cross(tangent).normalize();
+    const center = point.clone().addScaledVector(normal, 0.035 + strokeIndex * 0.00002);
+    const radius = Math.max(0.3, stroke.size / 2);
+    const color = /^#[0-9a-f]{6}$/i.test(stroke.color) ? stroke.color.toLowerCase() : "#ffffff";
+    const group = groups.get(color) ?? { vertices: [], faces: [] };
+    if (!groups.has(color)) groups.set(color, group);
+    const centerIndex = group.vertices.length;
+    group.vertices.push(center.toArray() as [number, number, number]);
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment / segments) * Math.PI * 2;
+      const edge = center.clone()
+        .addScaledVector(tangent, Math.cos(angle) * radius)
+        .addScaledVector(bitangent, Math.sin(angle) * radius);
+      group.vertices.push(edge.toArray() as [number, number, number]);
+    }
+    for (let segment = 0; segment < segments; segment += 1) {
+      group.faces.push([centerIndex, centerIndex + 1 + segment, centerIndex + 1 + ((segment + 1) % segments)]);
+    }
+  });
+  return [...groups.entries()].map(([color, group], index) => ({
+    name: `${source.name} paint ${index + 1}`,
+    vertices: group.vertices,
+    faces: group.faces,
+    shape: {
+      ...source.shape,
+      color,
+      material: { ...source.shape.material, doubleSided: true },
+      gameAsset: { collider: "none", lodCount: 0 },
+      paintStrokes: undefined,
+    },
+  }));
 }
 
 function meshAttributes(mesh: GlbExportMesh) {
@@ -157,6 +220,13 @@ export function exportMeshesToGlb(meshes: readonly GlbExportMesh[]): Blob {
       mesh,
       extras: { sketchforge: { collider: gameAsset.collider, triangleCount: source.faces.length } },
     };
+    const paintNodeIds = paintOverlayMeshes(source).flatMap((paintSource) => {
+      const paintMesh = addGltfMesh(paintSource);
+      return paintMesh === undefined
+        ? []
+        : [nodes.push({ name: paintSource.name, mesh: paintMesh, extras: { sketchforge: { paintLayer: true } } }) - 1];
+    });
+    if (paintNodeIds.length) node.children = paintNodeIds;
     const lodIds: number[] = [];
     for (let level = 1; level <= gameAsset.lodCount; level += 1) {
       const stride = 2 ** level;

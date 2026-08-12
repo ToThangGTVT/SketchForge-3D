@@ -851,6 +851,15 @@ function validateShapeDefinition(definition: Record<string, unknown>, label: str
   const kind = stringValue(definition.kind, `${label}.kind`);
   if (!SHAPE_KINDS.has(kind)) throw new Error(`${label} has unknown shape type '${kind}'`);
   stringValue(definition.color, `${label}.color`);
+  if (definition.paintStrokes !== undefined) {
+    if (!Array.isArray(definition.paintStrokes) || definition.paintStrokes.length > 800) throw new Error(`${label}.paintStrokes is invalid`);
+    definition.paintStrokes.forEach((rawStroke, index) => {
+      const stroke = objectRecord(rawStroke, `${label}.paintStrokes[${index}]`);
+      ["x", "y", "z", "normalX", "normalY", "normalZ", "size"].forEach((field) => finiteNumber(stroke[field], `${label}.paintStrokes[${index}].${field}`));
+      if (typeof stroke.color !== "string" || !/^#[0-9a-f]{6}$/i.test(stroke.color)) throw new Error(`${label}.paintStrokes[${index}].color is invalid`);
+      if ((stroke.size as number) <= 0 || (stroke.size as number) > 1000) throw new Error(`${label}.paintStrokes[${index}].size is invalid`);
+    });
+  }
   ["x", "z", "size", "width", "depth", "height", "rotation"].forEach((field) => finiteNumber(definition[field], `${label}.${field}`));
   if ((definition.width as number) <= 0 || (definition.depth as number) <= 0 || (definition.height as number) <= 0) {
     throw new Error(`${label} has non-positive dimensions`);

@@ -39,6 +39,19 @@ export type GameMaterial = {
   doubleSided?: boolean;
 };
 
+// A brush stamp is stored in the object's local coordinate system, so painted
+// marks stay attached when the object is moved or rotated.
+export type PaintStroke = {
+  x: number;
+  y: number;
+  z: number;
+  normalX: number;
+  normalY: number;
+  normalZ: number;
+  color: string;
+  size: number;
+};
+
 export type GameCollider = "none" | "box" | "sphere" | "mesh";
 
 // Optional, export-only metadata. It leaves the CAD model and its boolean
@@ -196,6 +209,7 @@ export type WorkplaneShape = {
   name: string;
   kind: ShapeKind;
   color: string;
+  paintStrokes?: PaintStroke[];
   material?: GameMaterial;
   gameAsset?: GameAssetSettings;
   hole?: boolean;

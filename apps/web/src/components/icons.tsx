@@ -140,6 +140,66 @@ export function ToolbarIntersectionIcon(props: IconProps) {
   );
 }
 
+export function ToolbarDrillHoleIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>
+      <path d="M14 10h20v7H14zM17 17h14v20a7 7 0 0 1-14 0z" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinejoin="round" />
+      <path d="M21 22h6M21 27h6M21 32h6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+      <path d="M24 39v5M19 44h10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ToolbarApplyDrillIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>
+      <path d="M9 14 24 7l15 7v18L24 40 9 32z" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinejoin="round" />
+      <path d="m9 14 15 8 15-8M24 22v18" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinejoin="round" />
+      <ellipse cx="24" cy="14.5" rx="4.2" ry="2.2" fill="none" stroke="currentColor" strokeWidth="2.1" />
+      <path d="m31 34 3 3 6-7" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function ToolbarPaintIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>
+      <path d="M24 8C14.2 8 7 15.1 7 24.4 7 33.2 13.6 40 22.4 40h3.9c2.5 0 3.7-3.1 1.8-4.8-1.2-1.1-.4-3.2 1.2-3.2h2.1c5.3 0 9.6-4.2 9.6-9.4C41 14.5 33.4 8 24 8Z" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinejoin="round" />
+      <circle cx="15.5" cy="22" r="2.2" fill="currentColor" />
+      <circle cx="22.5" cy="15.5" r="2.2" fill="currentColor" />
+      <circle cx="31.4" cy="18.4" r="2.2" fill="currentColor" />
+      <circle cx="15.8" cy="30" r="2.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function ToolbarSelectIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>
+      <path
+        d="M8 7.5 22.2 42l5.1-14.7L42 22.2Z"
+        fill="currentColor"
+        fillOpacity="0.12"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function ToolbarBrushPaintIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>
+      <rect x="7" y="8" width="27" height="12" rx="3" fill="none" stroke="currentColor" strokeWidth="2.8" />
+      <path d="M11 13h19" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" opacity="0.35" />
+      <path d="M34 14h5v10H24v6" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="19" y="29" width="10" height="15" rx="2.5" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function ToolbarAlignIcon(props: IconProps) {
   return <ToolbarSpriteIcon rect={{ x: 97.3, y: 46.7, width: 29.1, height: 32.5 }} {...props} />;
 }

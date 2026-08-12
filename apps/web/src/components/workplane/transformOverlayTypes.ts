@@ -1,6 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 
-export type TransformHandleKind = "scale" | "height" | "lift" | "rotate";
+export type TransformHandleKind = "scale" | "height" | "lift" | "move" | "rotate";
 export type RotationAxis = "x" | "y" | "z";
 export type RotationWheelView = { x: number; y: number; radius: number };
 

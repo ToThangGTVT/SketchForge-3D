@@ -2300,6 +2300,40 @@ button {
   transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
 
+.toolbar-tooltip-trigger {
+  display: inline-flex;
+}
+
+.toolbar-tooltip {
+  z-index: 100;
+  display: grid;
+  max-width: 240px;
+  gap: 2px;
+  padding: 7px 9px;
+  color: #eaf7fb;
+  font-size: 11px;
+  line-height: 1.3;
+  background: #183447;
+  border: 1px solid #2b5d76;
+  border-radius: 6px;
+  box-shadow: 0 5px 16px rgba(12, 31, 43, 0.25);
+}
+
+.toolbar-tooltip strong {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.toolbar-tooltip span {
+  color: #bad1dc;
+  font-weight: 650;
+}
+
+.toolbar-tooltip-arrow {
+  fill: #183447;
+}
+
 .toolbar-icon.disabled {
   color: #d6e0e9;
   cursor: default;
@@ -2320,6 +2354,99 @@ button {
   background: rgba(255, 255, 255, 0.84);
   box-shadow: inset 0 0 0 2px rgba(0, 166, 219, 0.28);
   color: #0b8dbd;
+}
+
+.paint-dropdown {
+  position: fixed;
+  z-index: 70;
+  display: grid;
+  width: min(280px, calc(100vw - 24px));
+  gap: 5px;
+  padding: 9px;
+  color: #29465f;
+  background: #f8fbfd;
+  border: 1px solid #c4d4e0;
+  border-radius: 9px;
+  box-shadow: 0 12px 28px rgba(30, 55, 74, 0.18);
+}
+
+.paint-dropdown-title {
+  padding: 1px 4px 4px;
+  color: #678096;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.paint-dropdown > button {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 7px;
+  align-items: center;
+  padding: 7px;
+  color: #29465f;
+  text-align: left;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.paint-dropdown > button:hover,
+.paint-dropdown > button.active {
+  background: #e2f4fb;
+}
+
+.paint-dropdown > button svg {
+  width: 30px;
+  height: 30px;
+  color: #168db9;
+}
+
+.paint-dropdown > button span {
+  display: grid;
+  gap: 1px;
+}
+
+.paint-dropdown > button strong {
+  font-size: 12px;
+}
+
+.paint-dropdown > button small {
+  color: #70889a;
+  font-size: 10px;
+}
+
+.paint-dropdown-color,
+.paint-dropdown-size {
+  display: grid;
+  gap: 5px;
+  padding: 7px 4px 2px;
+  color: #5c7589;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.paint-dropdown-color {
+  grid-template-columns: 1fr 38px;
+  align-items: center;
+}
+
+.paint-dropdown-color input {
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.paint-dropdown-size span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.paint-dropdown-size input {
+  width: 100%;
 }
 
 .toolbar-icon svg,
@@ -4139,6 +4266,11 @@ button {
   content: none;
 }
 
+.workplane-wrap.paint-mode .three-workplane-host,
+.workplane-wrap.paint-mode .three-workplane-host canvas {
+  cursor: crosshair;
+}
+
 .three-workplane-host {
   position: absolute;
   inset: 0;
@@ -4649,13 +4781,38 @@ button {
   background: transparent;
   border-left: 6px solid transparent;
   border-right: 6px solid transparent;
-  border-bottom: 13px solid #293743;
+  border-bottom: 13px solid #39a852;
   box-shadow: none;
 }
 
 .transform-handle.height-lift.lower {
   border-bottom: 0;
-  border-top: 13px solid #293743;
+  border-top: 13px solid #39a852;
+}
+
+.transform-handle.move-axis {
+  width: 0;
+  height: 0;
+  background: transparent;
+  border: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 14px solid currentColor;
+  box-shadow: none;
+}
+
+.transform-handle.move-axis:active {
+  cursor: grabbing;
+}
+
+.transform-handle.move-x {
+  color: #e64b45;
+  cursor: ew-resize;
+}
+
+.transform-handle.move-z {
+  color: #2b82d8;
+  cursor: ns-resize;
 }
 
 .rotate-handle {

@@ -35,4 +35,45 @@ describe("GLB export", () => {
     expect(json.extensionsUsed).toContain("MSFT_lod");
     expect(json.nodes.find((node: { name: string }) => node.name === "LOD mesh").extras.sketchforge.collider).toBe("box");
   });
+
+  it("exports brush paint as a separate child layer without tinting the base mesh", async () => {
+    const blob = exportMeshesToGlb([{
+      name: "Painted wall",
+      vertices: [[0, 0, 0], [20, 0, 0], [0, 20, 0]],
+      faces: [[0, 1, 2]],
+      shape: {
+        color: "#d41721",
+        x: 0,
+        z: 0,
+        elevation: 0,
+        height: 20,
+        rotation: 0,
+        paintStrokes: [{
+          x: 5,
+          y: 0,
+          z: 0,
+          normalX: 0,
+          normalY: 0,
+          normalZ: 1,
+          color: "#1268d8",
+          size: 8,
+        }],
+      },
+    }]);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const jsonLength = new DataView(bytes.buffer).getUint32(12, true);
+    const json = JSON.parse(new TextDecoder().decode(bytes.slice(20, 20 + jsonLength)));
+    const baseNode = json.nodes.find((node: { name: string }) => node.name === "Painted wall");
+    const paintNode = json.nodes.find((node: { extras?: { sketchforge?: { paintLayer?: boolean } } }) => node.extras?.sketchforge?.paintLayer);
+
+    expect(json.meshes).toHaveLength(2);
+    expect(json.meshes[0].primitives[0].attributes).not.toHaveProperty("COLOR_0");
+    expect(baseNode.children).toEqual([json.nodes.indexOf(paintNode)]);
+    expect(paintNode.name).toBe("Painted wall paint 1");
+    expect(json.materials.map((material: { pbrMetallicRoughness: { baseColorFactor: number[] } }) => material.pbrMetallicRoughness.baseColorFactor.slice(0, 3))).toContainEqual([
+      0x12 / 255,
+      0x68 / 255,
+      0xd8 / 255,
+    ]);
+  });
 });

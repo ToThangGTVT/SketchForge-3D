@@ -25,6 +25,7 @@
     "mcp:sketchforge": "node scripts/sketchforge-mcp-server.mjs"
   },
   "dependencies": {
+    "@radix-ui/react-tooltip": "^1.2.16",
     "@tailwindcss/postcss": "^4.1.8",
     "@types/three": "^0.184.1",
     "brepjs": "^18.118.0",

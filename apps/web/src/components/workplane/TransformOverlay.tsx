@@ -215,7 +215,7 @@ export function TransformOverlay({
               onHoverMeasure(null);
               return;
             }
-            onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle));
+            onHoverMeasure(handle.kind === "lift" || handle.kind === "move" ? null : handleMeasureKey(handle));
           }}
           onPointerLeave={() => onHoverMeasure(null)}
           onPointerDown={(event) => {

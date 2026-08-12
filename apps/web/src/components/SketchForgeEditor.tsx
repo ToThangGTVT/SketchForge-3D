@@ -1,9 +1,10 @@
 "use client";
 
 import { Check, CloudUpload, Download, Eye, FolderOpen, X } from "lucide-react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import type manifoldModule from "manifold-3d";
 import type { ManifoldToplevel } from "manifold-3d";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ADDITION, Brush, Evaluator, HOLLOW_INTERSECTION, HOLLOW_SUBTRACTION, INTERSECTION, SUBTRACTION, type CSGOperation } from "three-bvh-csg";
 import * as THREE from "three";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
@@ -29,6 +30,9 @@ import {
   ToolbarCopyIcon,
   ToolbarDuplicateIcon,
   ToolbarDropToWorkplaneIcon,
+  ToolbarApplyDrillIcon,
+  ToolbarBrushPaintIcon,
+  ToolbarDrillHoleIcon,
   ToolbarExportIcon,
   ToolbarGroupIcon,
   ToolbarHideSelectedIcon,
@@ -38,7 +42,9 @@ import {
   ToolbarFilletIcon,
   ToolbarMirrorIcon,
   ToolbarPasteIcon,
+  ToolbarPaintIcon,
   ToolbarRedoIcon,
+  ToolbarSelectIcon,
   ToolbarSnapGridIcon,
   ToolbarSettingsIcon,
   ToolbarShapeAddIcon,
@@ -119,7 +125,7 @@ import {
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
 import type { SketchCadBuildResponse } from "@/lib/sketchCadTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, PaintStroke, ProjectAsset, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
@@ -5404,6 +5410,9 @@ export function SketchForgeEditor({
   const [alignAnchorId, setAlignAnchorId] = useState<string | null>(null);
   const [alignPreview, setAlignPreview] = useState<{ axis: AlignAxis; target: AlignTarget } | null>(null);
   const [mirrorMode, setMirrorMode] = useState(false);
+  const [paintMode, setPaintMode] = useState<"object" | "brush" | null>(null);
+  const [paintColor, setPaintColor] = useState("#d41721");
+  const [paintBrushSize, setPaintBrushSize] = useState(8);
   const [mirrorPreviewAxis, setMirrorPreviewAxis] = useState<AlignAxis | null>(null);
   const [activeMode, setActiveMode] = useState("3D Design");
   const [notice, setNotice] = useState("Ready");
@@ -6826,6 +6835,37 @@ export function SketchForgeEditor({
     [commitShapes, scheduleRevolveShapeUpdate, selectedIds, shapes],
   );
 
+  const paintShape = useCallback((id: string, color: string) => {
+    const target = shapesRef.current.find((shape) => shape.id === id);
+    if (!target || target.locked || target.hole || target.color.toLowerCase() === color.toLowerCase()) {
+      return;
+    }
+    commitShapes(
+      shapesRef.current.map((shape) => shape.id === id ? { ...shape, color } : shape),
+      id,
+      `Painted ${target.name}`,
+    );
+  }, [commitShapes]);
+
+  const togglePaintMode = useCallback((mode: "object" | "brush") => {
+    setPaintMode((active) => {
+      const next = active === mode ? null : mode;
+      if (next) {
+        setWorkplaneMode(false);
+        setAlignMode(false);
+        setMirrorMode(false);
+      }
+      setNotice(next === "brush" ? "Brush paint: drag across an object to apply color" : next ? "Paint object: click an object to apply the selected color" : "Paint mode off");
+      return next;
+    });
+  }, []);
+
+  const paintStroke = useCallback((id: string, strokes: PaintStroke[]) => {
+    const target = shapesRef.current.find((shape) => shape.id === id);
+    if (!target || target.locked || target.hole || strokes.length === 0) return;
+    updateShape(id, { paintStrokes: [...(target.paintStrokes ?? []), ...strokes].slice(-800) });
+  }, [updateShape]);
+
   const deleteSelected = useCallback(() => {
     if (!hasSelection) {
       setNotice("Select a shape first");
@@ -7105,6 +7145,18 @@ export function SketchForgeEditor({
   const cancelEdgeModifier = useCallback(() => {
     invalidateCadModifierSession();
     setNotice("Edge modifier cancelled");
+  }, [invalidateCadModifierSession]);
+
+  const activateSelectMode = useCallback(() => {
+    invalidateCadModifierSession();
+    setPaintMode(null);
+    setAlignMode(false);
+    setAlignAnchorId(null);
+    setAlignPreview(null);
+    setMirrorMode(false);
+    setMirrorPreviewAxis(null);
+    setWorkplaneMode(false);
+    setNotice("Select mode");
   }, [invalidateCadModifierSession]);
 
   const startEdgeModifier = useCallback((kind: CadModifierKind) => {
@@ -7452,6 +7504,22 @@ export function SketchForgeEditor({
     );
   }, [commitShapes, hasSelection, selectedIds, selectedShapes, shapes]);
 
+  const makeSelectedHole = useCallback(() => {
+    if (selectedShapes.length !== 1 || !selectedShape || selectedShape.locked) {
+      setNotice("Select one unlocked shape to make a hole cutter");
+      return;
+    }
+    if (selectedShape.hole) {
+      setNotice("This shape is already a hole cutter");
+      return;
+    }
+    commitShapes(
+      shapes.map((shape) => shape.id === selectedShape.id ? canonicalizeShape(withHoleMode(shape, true)) : shape),
+      selectedShape.id,
+      `${selectedShape.name} is now a hole cutter. Select it with a solid, then Group to drill the hole`,
+    );
+  }, [commitShapes, selectedShape, selectedShapes.length, shapes]);
+
   const showHidden = useCallback(() => {
     const hiddenCount = shapes.filter((shape) => shape.hidden).length;
     if (hiddenCount === 0) {
@@ -7625,6 +7693,43 @@ export function SketchForgeEditor({
     const selected = new Set(selectedIds);
     const editableGroup = canonicalizeShape({ ...group, groupOperation: "group" });
     commitShapes([...shapesRef.current.filter((shape) => !selected.has(shape.id)), editableGroup], editableGroup.id, `Grouped ${selectedShapes.length} shapes`);
+  }, [commitShapes, selectedIds, selectedShapes]);
+
+  const applyDrillSelected = useCallback(async () => {
+    const operands = selectedShapes.filter((shape) => !shape.locked);
+    const solids = operands.filter((shape) => !shape.hole);
+    const cutters = operands.filter((shape) => shape.hole);
+    if (!solids.length || !cutters.length) {
+      setNotice("Select at least one solid and one hole cutter to apply a drill");
+      return;
+    }
+    const sourceFingerprint = projectShapesFingerprint(shapesRef.current);
+    const sourceProjectId = projectInfoRef.current.projectId;
+    setNotice("Applying drill and baking the final mesh…");
+    const result = await buildGroupedShapeFromSelection(operands);
+    if (projectInfoRef.current.projectId !== sourceProjectId || projectShapesFingerprint(shapesRef.current) !== sourceFingerprint) {
+      setNotice("The scene changed while applying the drill; try again");
+      return;
+    }
+    if (!result.group?.importedMesh) {
+      setNotice(result.consumed ? "Drill consumed the solid" : result.failureNotice);
+      return;
+    }
+    const selected = new Set(selectedIds);
+    const baked = canonicalizeShape({
+      ...result.group,
+      name: solids.length === 1 ? `${solids[0].name} drilled` : "Drilled mesh",
+      groupedShapes: undefined,
+      groupedBaseWidth: undefined,
+      groupedBaseDepth: undefined,
+      groupedBaseHeight: undefined,
+      groupOperation: undefined,
+    });
+    commitShapes(
+      [...shapesRef.current.filter((shape) => !selected.has(shape.id)), baked],
+      baked.id,
+      `Applied drill: baked ${cutters.length} hole cutter${cutters.length === 1 ? "" : "s"} into final mesh`,
+    );
   }, [commitShapes, selectedIds, selectedShapes]);
 
   const intersectSelected = useCallback(async () => {
@@ -8663,6 +8768,11 @@ export function SketchForgeEditor({
       }
 
       if (event.key === "Escape") {
+        if (paintMode) {
+          event.preventDefault();
+          togglePaintMode(paintMode);
+          return;
+        }
         setSelectedIds([]);
         setNotice("Selection cleared");
         return;
@@ -8799,6 +8909,7 @@ export function SketchForgeEditor({
     hasSelection,
     nudgeSelected,
     pasteShape,
+    paintMode,
     raiseSelected,
     redo,
     sketchActive,
@@ -8811,6 +8922,7 @@ export function SketchForgeEditor({
     toggleAlignMode,
     toggleHidden,
     toggleMirrorMode,
+    togglePaintMode,
     toggleLocked,
     toolbarMode,
     undo,
@@ -8831,6 +8943,7 @@ export function SketchForgeEditor({
         canRedo={!projectInteractionActive && historyIndex < history.length - 1}
         canGroup={selectedShapes.length > 1 && selectedShapes.every((shape) => !shape.locked)}
         canIntersect={selectedShapes.some((shape) => !shape.locked && !shape.hole) && selectedShapes.some((shape) => !shape.locked && Boolean(shape.hole))}
+        canApplyDrill={selectedShapes.some((shape) => !shape.locked && !shape.hole) && selectedShapes.some((shape) => !shape.locked && Boolean(shape.hole))}
         canUngroup={selectedShapes.some((shape) => Boolean(shape.groupedShapes?.length))}
         hasClipboard={clipboard.length > 0 || systemClipboardSupported}
         hasSelection={hasSelection}
@@ -8838,9 +8951,13 @@ export function SketchForgeEditor({
         selectionHidden={hasSelection && selectedShapes.every((shape) => shape.hidden)}
         alignMode={alignMode}
         canAlign={selectedShapes.length > 1}
+        canDrill={selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
         canEdgeModify={selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
         edgeModifierKind={edgeModifier?.kind ?? null}
         mirrorMode={mirrorMode}
+        paintMode={paintMode}
+        paintColor={paintColor}
+        paintBrushSize={paintBrushSize}
         sketchActive={sketchActive}
         sketchOperation={sketchOperation}
         sketchTool={sketchTool}
@@ -8868,10 +8985,16 @@ export function SketchForgeEditor({
         onDelete={deleteSelected}
         onDuplicate={duplicateSelected}
         onDropToWorkplane={dropSelectedToWorkplane}
+        onDrill={makeSelectedHole}
+        onApplyDrill={applyDrillSelected}
         onGroup={groupSelected}
         onIntersect={intersectSelected}
         onFillet={() => edgeModifier?.kind === "fillet" ? cancelEdgeModifier() : startEdgeModifier("fillet")}
         onMirror={toggleMirrorMode}
+        onSelect={activateSelectMode}
+        onPaint={togglePaintMode}
+        onPaintColorChange={setPaintColor}
+        onPaintBrushSizeChange={setPaintBrushSize}
         onPaste={pasteShape}
         onRedo={redo}
         onSnap={snapSelected}
@@ -8939,6 +9062,9 @@ export function SketchForgeEditor({
           alignHandles={alignHandleStatuses}
           alignReferenceShapes={shapes}
           mirrorMode={mirrorMode}
+          paintMode={paintMode}
+          paintColor={paintColor}
+          paintBrushSize={paintBrushSize}
           mirrorReferenceShapes={shapes}
           placementWorkplane={placementWorkplane}
           workplaneMode={workplaneMode}
@@ -8953,6 +9079,8 @@ export function SketchForgeEditor({
           onMirrorPreview={previewMirrorSelection}
           onMirrorPreviewClear={clearMirrorPreview}
           onMirrorSelection={mirrorSelectionAcross}
+          onPaintShape={paintShape}
+          onPaintStroke={paintStroke}
           onSelectShape={selectShape}
           onSetPlacementWorkplane={setViewportPlacementWorkplane}
           onToggleWorkplaneTool={activateWorkplaneTool}
@@ -9125,6 +9253,8 @@ function SecondaryToolbar({
   onToolbarModeChange,
   alignMode,
   canAlign,
+  canDrill,
+  canApplyDrill,
   canEdgeModify,
   edgeModifierKind,
   canGroup,
@@ -9137,6 +9267,9 @@ function SecondaryToolbar({
   hiddenShapeCount,
   selectionHidden,
   mirrorMode,
+  paintMode,
+  paintColor,
+  paintBrushSize,
   sketchActive,
   sketchOperation,
   sketchTool,
@@ -9158,10 +9291,16 @@ function SecondaryToolbar({
   onDelete,
   onDuplicate,
   onDropToWorkplane,
+  onDrill,
+  onApplyDrill,
   onGroup,
   onIntersect,
   onFillet,
   onMirror,
+  onSelect,
+  onPaint,
+  onPaintColorChange,
+  onPaintBrushSizeChange,
   onPaste,
   onRedo,
   onSnap,
@@ -9176,6 +9315,8 @@ function SecondaryToolbar({
   onToolbarModeChange: (mode: ToolbarMode) => void;
   alignMode: boolean;
   canAlign: boolean;
+  canDrill: boolean;
+  canApplyDrill: boolean;
   canEdgeModify: boolean;
   edgeModifierKind: CadModifierKind | null;
   canGroup: boolean;
@@ -9188,6 +9329,9 @@ function SecondaryToolbar({
   hiddenShapeCount: number;
   selectionHidden: boolean;
   mirrorMode: boolean;
+  paintMode: "object" | "brush" | null;
+  paintColor: string;
+  paintBrushSize: number;
   sketchActive: boolean;
   sketchOperation: SketchOperation;
   sketchTool: SketchTool;
@@ -9209,10 +9353,16 @@ function SecondaryToolbar({
   onDelete: () => void;
   onDuplicate: () => void;
   onDropToWorkplane: () => void;
+  onDrill: () => void;
+  onApplyDrill: () => void;
   onGroup: () => void;
   onIntersect: () => void;
   onFillet: () => void;
   onMirror: () => void;
+  onSelect: () => void;
+  onPaint: (mode: "object" | "brush") => void;
+  onPaintColorChange: (color: string) => void;
+  onPaintBrushSizeChange: (size: number) => void;
   onPaste: () => void;
   onRedo: () => void;
   onSnap: () => void;
@@ -9227,14 +9377,18 @@ function SecondaryToolbar({
   const [sketchCreateOpen, setSketchCreateOpen] = useState(false);
   const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [visibilityMenuPosition, setVisibilityMenuPosition] = useState({ top: 0, left: 0 });
+  const [paintOpen, setPaintOpen] = useState(false);
+  const [paintMenuPosition, setPaintMenuPosition] = useState({ top: 0, left: 0 });
   const sketchCreateMenuRef = useRef<HTMLDivElement>(null);
   const visibilityMenuRef = useRef<HTMLDivElement>(null);
+  const paintMenuRef = useRef<HTMLDivElement>(null);
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {
     setShapesOpen(false);
     setSketchCreateOpen(false);
     setVisibilityOpen(false);
+    setPaintOpen(false);
     onTopPanel(null);
     onToolbarModeChange(mode);
   };
@@ -9284,6 +9438,21 @@ function SecondaryToolbar({
       window.removeEventListener("scroll", closeOnViewportChange, true);
     };
   }, [visibilityOpen]);
+  useEffect(() => {
+    if (!paintOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!paintMenuRef.current?.contains(event.target as Node)) setPaintOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPaintOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [paintOpen]);
   const toggleVisibilityMenu = () => {
     if (visibilityOpen) {
       setVisibilityOpen(false);
@@ -9309,6 +9478,30 @@ function SecondaryToolbar({
     onTopPanel(null);
     setVisibilityOpen(true);
   };
+  const togglePaintMenu = () => {
+    if (paintMode) {
+      onPaint(paintMode);
+      setPaintOpen(false);
+      return;
+    }
+    if (paintOpen) {
+      setPaintOpen(false);
+      return;
+    }
+    const triggerBounds = paintMenuRef.current?.getBoundingClientRect();
+    if (triggerBounds) {
+      const menuWidth = Math.min(280, Math.max(0, window.innerWidth - 24));
+      setPaintMenuPosition({
+        top: triggerBounds.bottom + 8,
+        left: Math.max(12, Math.min(triggerBounds.left + triggerBounds.width / 2 - menuWidth / 2, window.innerWidth - menuWidth - 12)),
+      });
+    }
+    setShapesOpen(false);
+    setSketchCreateOpen(false);
+    setVisibilityOpen(false);
+    onTopPanel(null);
+    setPaintOpen(true);
+  };
   const leftTools = [
     { label: "Copy", icon: ToolbarCopyIcon, action: onCopy, enabled: hasSelection },
     { label: "Paste", icon: ToolbarPasteIcon, action: onPaste, enabled: hasClipboard },
@@ -9329,11 +9522,23 @@ function SecondaryToolbar({
     },
   ];
   const combineTools = [
+    { label: "Make hole cutter", hint: "Turn the selected shape into a cutter", icon: ToolbarDrillHoleIcon, action: onDrill, enabled: canDrill },
+    { label: "Apply drill (bake hole)", hint: "Select a solid and a hole cutter to bake the final drilled mesh", icon: ToolbarApplyDrillIcon, action: onApplyDrill, enabled: canApplyDrill },
     { label: "Group", icon: ToolbarGroupIcon, action: onGroup, enabled: canGroup },
     { label: "Ungroup", icon: ToolbarUngroupIcon, action: onUngroup, enabled: canUngroup },
     { label: "Boolean Intersection", icon: ToolbarIntersectionIcon, action: onIntersect, enabled: canIntersect },
   ];
   const modifyTools = [
+    {
+      label: "Select",
+      icon: ToolbarSelectIcon,
+      action: () => {
+        setPaintOpen(false);
+        onSelect();
+      },
+      enabled: true,
+      active: !paintOpen && !alignMode && !mirrorMode && !paintMode && !edgeModifierKind,
+    },
     { label: "Align", icon: ToolbarAlignIcon, action: onAlign, enabled: canAlign, active: alignMode },
     { label: "Mirror", icon: ToolbarMirrorIcon, action: onMirror, enabled: hasSelection, active: mirrorMode },
     { label: "Snap to grid", icon: ToolbarSnapGridIcon, action: onSnap, enabled: hasSelection },
@@ -9345,23 +9550,36 @@ function SecondaryToolbar({
   ];
   const renderToolButton = (tool: (typeof leftTools)[number] | (typeof visibilityTools)[number] | (typeof combineTools)[number] | (typeof modifyTools)[number] | (typeof arrangeTools)[number]) => {
     const { icon: Icon, action, enabled, label } = tool;
+    const hint = "hint" in tool ? tool.hint : label;
     const active = "active" in tool && Boolean(tool.active);
     return (
-      <button
-        className={`toolbar-icon ${enabled ? "" : "disabled"} ${active ? "active" : ""}`}
-        key={label}
-        data-sketchforge-tool={label === "Fillet" ? "fillet" : undefined}
-        aria-label={label}
-        title={label}
-        onClick={action}
-        disabled={!enabled}
-      >
-        <Icon />
-      </button>
+      <Tooltip.Root key={label} delayDuration={350}>
+        <Tooltip.Trigger asChild>
+          <span className="toolbar-tooltip-trigger">
+            <button
+              className={`toolbar-icon ${enabled ? "" : "disabled"} ${active ? "active" : ""}`}
+              data-sketchforge-tool={label === "Fillet" ? "fillet" : undefined}
+              aria-label={label}
+              onClick={action}
+              disabled={!enabled}
+            >
+              <Icon />
+            </button>
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="toolbar-tooltip" side="bottom" sideOffset={8}>
+            <strong>{label}</strong>
+            {hint !== label ? <span>{hint}</span> : null}
+            <Tooltip.Arrow className="toolbar-tooltip-arrow" width={10} height={5} />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
     );
   };
 
   return (
+    <Tooltip.Provider delayDuration={350} skipDelayDuration={150}>
     <div className="secondary-toolbar">
       <div className={`toolbar-mode-content ${toolbarMode}`}>
         {toolbarMode === "geometry" ? (
@@ -9524,9 +9742,48 @@ function SecondaryToolbar({
           <div className="toolbar-section-label">Combine</div>
           <div className="toolbar-section-tools">{combineTools.map(renderToolButton)}</div>
         </div>
-        <div className="toolbar-section">
+        <div className="toolbar-section" ref={paintMenuRef}>
           <div className="toolbar-section-label">Modify</div>
-          <div className="toolbar-section-tools">{modifyTools.map(renderToolButton)}</div>
+          <div className="toolbar-section-tools">
+            {modifyTools.map(renderToolButton)}
+            <button
+              className={`toolbar-icon ${paintOpen || paintMode ? "active" : ""}`}
+              type="button"
+              aria-label={paintMode ? "Exit paint mode" : "Paint options"}
+              title={paintMode ? "Exit paint mode (Esc)" : "Paint options"}
+              aria-haspopup="menu"
+              aria-expanded={paintOpen}
+              onClick={togglePaintMenu}
+            >
+              <ToolbarPaintIcon />
+            </button>
+          </div>
+          {paintOpen ? (
+            <div className="paint-dropdown" role="menu" aria-label="Paint options" style={paintMenuPosition}>
+              <div className="paint-dropdown-title">Paint</div>
+              <button className={paintMode === "object" ? "active" : ""} type="button" role="menuitem" onClick={() => { onPaint("object"); setPaintOpen(false); }}>
+                <ToolbarPaintIcon />
+                <span><strong>Fill object</strong><small>Apply one color to the whole object</small></span>
+              </button>
+              <button className={paintMode === "brush" ? "active" : ""} type="button" role="menuitem" onClick={() => { onPaint("brush"); setPaintOpen(false); }}>
+                <ToolbarBrushPaintIcon />
+                <span><strong>Brush paint</strong><small>Drag across a surface · Esc to finish</small></span>
+              </button>
+              <label className="paint-dropdown-color">
+                <span>Color</span>
+                <input type="color" value={paintColor} onChange={(event) => onPaintColorChange(event.currentTarget.value)} aria-label="Paint color" />
+              </label>
+              <label
+                className="paint-dropdown-size"
+                style={{ "--slider-pos": `${((paintBrushSize - 2) / 28) * 100}%` } as CSSProperties}
+              >
+                <span>Brush size <strong>{paintBrushSize} mm</strong></span>
+                <div className="range-control">
+                  <input type="range" min="2" max="30" step="1" value={paintBrushSize} onChange={(event) => onPaintBrushSizeChange(Number(event.currentTarget.value))} aria-label="Brush size" />
+                </div>
+              </label>
+            </div>
+          ) : null}
         </div>
         <div className="toolbar-section">
           <div className="toolbar-section-label">Arrange</div>
@@ -9685,6 +9942,7 @@ function SecondaryToolbar({
         </button>
       </div>
     </div>
+    </Tooltip.Provider>
   );
 }
 

@@ -182,6 +182,7 @@ export function workplaneShapesEqual(a: WorkplaneShape, b: WorkplaneShape) {
     a.name === b.name &&
     a.kind === b.kind &&
     a.color === b.color &&
+    a.paintStrokes === b.paintStrokes &&
     a.material === b.material &&
     a.gameAsset === b.gameAsset &&
     a.hole === b.hole &&
