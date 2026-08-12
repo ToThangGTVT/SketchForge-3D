@@ -220,6 +220,23 @@ export function ToolbarFilletIcon() {
   return <ToolbarCommandImage file="toolbar-fillet.png" className="toolbar-user-art-icon" />;
 }
 
+/**
+ * Push/pull: a block whose top face is lifted, with an arrow along the face
+ * normal. Drawn inline because there is no sprite or PNG art for it.
+ */
+export function ToolbarPushPullIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>
+      <path d="M10 26.5 24 20l14 6.5-14 6.5z" fill="currentColor" opacity="0.28" />
+      <path d="M10 26.5 24 20l14 6.5-14 6.5z" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" />
+      <path d="M10 26.5v7L24 40l14-6.5v-7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" />
+      <path d="M24 33v7" fill="none" stroke="currentColor" strokeWidth="2.4" />
+      <path d="M24 15.5V5" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      <path d="m19.5 9.5 4.5-4.5 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function ToolbarPreserveEdgeIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>

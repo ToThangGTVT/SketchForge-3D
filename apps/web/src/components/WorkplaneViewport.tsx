@@ -64,7 +64,8 @@ import {
   type TransformOverlayState,
 } from "@/components/workplane/TransformOverlay";
 import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, MeasurementAccuracy, PaintStroke, ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
-import type { CadModifierEdge } from "@/lib/cadModifierTypes";
+import type { CadModifierEdge, CadModifierFace, CadModifierFacePicking } from "@/lib/cadModifierTypes";
+import { cadFaceIndexSlice } from "@/lib/cadModifierRuntime";
 
 const WORKPLANE_WIDTH = 200;
 const WORKPLANE_DEPTH = 140;
@@ -210,6 +211,12 @@ type WorkplaneViewportProps = {
   modifierEdges?: CadModifierEdge[];
   selectedModifierEdgeIds?: number[];
   onModifierEdgeToggle?: (id: number, singleEdge: boolean) => void;
+  /** Face push/pull picking. Mutually exclusive with the edge props above. */
+  faceModifierActive?: boolean;
+  modifierFaces?: CadModifierFace[];
+  modifierFacePicking?: CadModifierFacePicking | null;
+  selectedModifierFaceIds?: number[];
+  onModifierFaceToggle?: (id: number, additive: boolean) => void;
   challengeTutorial?: ChallengeTutorialId | null;
   onChallengeTutorialFinish?: () => void;
   themePreference?: AppThemePreference;
@@ -2292,6 +2299,11 @@ export function WorkplaneViewport({
   modifierEdges = [],
   selectedModifierEdgeIds = [],
   onModifierEdgeToggle,
+  faceModifierActive = false,
+  modifierFaces = [],
+  modifierFacePicking = null,
+  selectedModifierFaceIds = [],
+  onModifierFaceToggle,
   challengeTutorial = null,
   onChallengeTutorialFinish,
   themePreference = "system",
@@ -2370,6 +2382,8 @@ export function WorkplaneViewport({
   const modifierPreviewActiveRef = useRef(modifierPreviewActive);
   const modifierEdgesRef = useRef(modifierEdges);
   const [hoverModifierEdgeId, setHoverModifierEdgeId] = useState<number | null>(null);
+  const faceModifierActiveRef = useRef(faceModifierActive);
+  const [hoverModifierFaceId, setHoverModifierFaceId] = useState<number | null>(null);
   const selectedIdsKeyRef = useRef(selectedIds.join("|"));
   const placementWorkplaneRef = useRef(placementWorkplane);
   const workplaneModeRef = useRef(workplaneMode);
@@ -2386,15 +2400,35 @@ export function WorkplaneViewport({
   const selectedShape = useMemo(() => (selectedIds.length === 1 ? shapes.find((shape) => shape.id === selectedIds[0]) ?? null : null), [selectedIds, shapes]);
   const renderSelectionIds = useCallback(
     (ids = selectedIdsRef.current) => (
-      workplaneModeRef.current || (modifierActiveRef.current && !modifierPreviewActiveRef.current) ? [] : ids
+      workplaneModeRef.current
+        || ((modifierActiveRef.current || faceModifierActiveRef.current) && !modifierPreviewActiveRef.current)
+        ? []
+        : ids
     ),
     [],
   );
 
   useEffect(() => {
     modifierEdgesRef.current = modifierEdges;
+    // Both tools draw into modifierLayer, so only the active one may fill it.
+    if (faceModifierActive) return;
     rebuildModifierEdges(threeRef.current, modifierEdges, selectedModifierEdgeIds, modifierPreviewActive, hoverModifierEdgeId);
-  }, [hoverModifierEdgeId, modifierEdges, modifierPreviewActive, selectedModifierEdgeIds]);
+  }, [faceModifierActive, hoverModifierEdgeId, modifierEdges, modifierPreviewActive, selectedModifierEdgeIds]);
+
+  useEffect(() => {
+    faceModifierActiveRef.current = faceModifierActive;
+    if (!faceModifierActive) {
+      setHoverModifierFaceId(null);
+      return;
+    }
+    rebuildModifierFaces(threeRef.current, modifierFaces, modifierFacePicking, selectedModifierFaceIds, modifierPreviewActive, hoverModifierFaceId);
+  }, [faceModifierActive, hoverModifierFaceId, modifierFacePicking, modifierFaces, modifierPreviewActive, selectedModifierFaceIds]);
+
+  useEffect(() => {
+    if (hoverModifierFaceId !== null && !modifierFaces.some((face) => face.id === hoverModifierFaceId)) {
+      setHoverModifierFaceId(null);
+    }
+  }, [hoverModifierFaceId, modifierFaces]);
 
   const resolvedThemeRef = useRef(resolvedTheme);
   resolvedThemeRef.current = resolvedTheme;
@@ -2666,11 +2700,13 @@ export function WorkplaneViewport({
       shapesRef.current,
       renderSelectionIds(),
       !transformRef.current && !dragRef.current,
-      modifierActive,
+      // The face tool wants the same clean CAD rendering the edge tools use, so
+      // its translucent overlays read as faces of a body.
+      modifierActive || faceModifierActive,
       placementWorkplaneRef.current,
     );
     if (threeRef.current) threeRef.current.needsRender = true;
-  }, [modifierActive, renderSelectionIds]);
+  }, [faceModifierActive, modifierActive, renderSelectionIds]);
 
   useEffect(() => {
     modifierPreviewActiveRef.current = modifierPreviewActive;
@@ -4029,6 +4065,21 @@ export function WorkplaneViewport({
     setHoverModifierEdgeId((current) => (current === null ? current : null));
   }, []);
 
+  const pickModifierFace = useCallback((clientX: number, clientY: number) => {
+    const state = threeRef.current;
+    if (!state) return null;
+    return pickModifierFaceFromScreen(state, clientX, clientY);
+  }, []);
+
+  const updateModifierFaceHover = useCallback((clientX: number, clientY: number) => {
+    const faceId = pickModifierFace(clientX, clientY);
+    setHoverModifierFaceId((current) => (current === faceId ? current : faceId));
+  }, [pickModifierFace]);
+
+  const clearModifierFaceHover = useCallback(() => {
+    setHoverModifierFaceId((current) => (current === null ? current : null));
+  }, []);
+
   const pickTransformHandle = useCallback((clientX: number, clientY: number) => {
     const state = threeRef.current;
     if (!state || selectedIdsRef.current.length !== 1) {
@@ -4066,6 +4117,13 @@ export function WorkplaneViewport({
       }
       clearMoveDimensions();
       const rect = state.renderer.domElement.getBoundingClientRect();
+
+      if (faceModifierActive) {
+        event.preventDefault();
+        const faceId = pickModifierFace(event.clientX, event.clientY);
+        if (faceId !== null) onModifierFaceToggle?.(faceId, event.shiftKey);
+        return;
+      }
 
       if (modifierActive) {
         event.preventDefault();
@@ -4390,6 +4448,9 @@ export function WorkplaneViewport({
       modifierActive,
       onAlignAnchorChange,
       onInteractionActiveChange,
+      onModifierFaceToggle,
+      faceModifierActive,
+      pickModifierFace,
       onModifierEdgeToggle,
       onPaintShape,
       onPaintStroke,
@@ -4457,6 +4518,10 @@ export function WorkplaneViewport({
           workspaceRef.current,
           resolvedThemeRef.current,
         );
+        return;
+      }
+      if (faceModifierActiveRef.current) {
+        updateModifierFaceHover(event.clientX, event.clientY);
         return;
       }
       if (modifierActiveRef.current) {
@@ -4544,7 +4609,7 @@ export function WorkplaneViewport({
         threeRef.current.needsRender = true;
       }
     },
-    [onPaintStroke, paintBrushSize, paintColor, pickPaintSurface, pickPlacementSurface, setMarqueeFromState, toPlacementWorkplanePoint, toRawPlanePoint, updateModifierEdgeHover, updateRulerHover, updateTransform],
+    [onPaintStroke, paintBrushSize, paintColor, pickPaintSurface, pickPlacementSurface, setMarqueeFromState, toPlacementWorkplanePoint, toRawPlanePoint, updateModifierEdgeHover, updateModifierFaceHover, updateRulerHover, updateTransform],
   );
 
   const handlePointerLeave = useCallback(() => {
@@ -4552,7 +4617,8 @@ export function WorkplaneViewport({
       syncWorkplaneHoverPreview(threeRef.current, null, workspaceRef.current, resolvedThemeRef.current);
     }
     if (modifierActiveRef.current) clearModifierEdgeHover();
-  }, [clearModifierEdgeHover]);
+    if (faceModifierActiveRef.current) clearModifierFaceHover();
+  }, [clearModifierEdgeHover, clearModifierFaceHover]);
 
   const finishDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -5049,7 +5115,7 @@ export function WorkplaneViewport({
         )}
       </div>
 
-      <section className={`workplane-wrap ${workplaneMode ? "placing-workplane" : ""} ${paintMode ? "paint-mode" : ""} ${rulerMode ? "ruler-mode" : ""} ${rulerDeleteMode ? "ruler-delete-mode" : ""} ${rulerMoveMode ? "ruler-move-mode" : ""} ${modifierActive ? "modifier-edge-pick" : ""}`} aria-label="Workplane">
+      <section className={`workplane-wrap ${workplaneMode ? "placing-workplane" : ""} ${paintMode ? "paint-mode" : ""} ${rulerMode ? "ruler-mode" : ""} ${rulerDeleteMode ? "ruler-delete-mode" : ""} ${rulerMoveMode ? "ruler-move-mode" : ""} ${modifierActive || faceModifierActive ? "modifier-edge-pick" : ""}`} aria-label="Workplane">
         <div className="workplane-plane">
           <div
             className="three-workplane-host"
@@ -5073,7 +5139,7 @@ export function WorkplaneViewport({
               onCommit={commitMoveDimension}
             />
           ) : null}
-          {!workplaneMode && !paintMode && transformOverlay && !alignMode && !mirrorMode && !rulerMode && !rulerDeleteMode && !rulerMoveMode && !modifierActive ? (
+          {!workplaneMode && !paintMode && transformOverlay && !alignMode && !mirrorMode && !rulerMode && !rulerDeleteMode && !rulerMoveMode && !modifierActive && !faceModifierActive ? (
             <TransformOverlay
               box={transformOverlay}
               measureKey={pinnedMeasureKey ?? hoverMeasureKey}
@@ -5121,7 +5187,7 @@ export function WorkplaneViewport({
         </div>
       </section>
 
-      {selectedShape && !modifierActive && !rulerMode && !rulerDeleteMode && !rulerMoveMode ? (
+      {selectedShape && !modifierActive && !faceModifierActive && !rulerMode && !rulerDeleteMode && !rulerMoveMode ? (
         <ShapeInspector
           shape={selectedShape}
           snap={snap}
@@ -6182,6 +6248,88 @@ function rebuildModifierEdges(state: ThreeState | null, edges: CadModifierEdge[]
     state.modifierLayer.add(line);
   });
   state.needsRender = true;
+}
+
+function modifierFaceMaterialStyle(active: boolean, hovered: boolean, previewActive: boolean) {
+  // Overlays are built from the prepared solid, so once a preview replaces the
+  // geometry they sit on the old surface. Fade them almost away rather than
+  // removing them, which would make it impossible to pick a different face
+  // without first clearing the preview.
+  if (previewActive) return { color: active ? "#ff8a1d" : "#17b7e5", opacity: hovered ? 0.2 : 0.05 };
+  if (active) return { color: "#ff8a1d", opacity: hovered ? 0.62 : 0.48 };
+  return { color: hovered ? "#84edff" : "#17b7e5", opacity: hovered ? 0.42 : 0.14 };
+}
+
+/**
+ * Draw one translucent overlay per selectable face.
+ *
+ * Each overlay is its own mesh so it can carry its own tint and so a raycast
+ * resolves straight to a face id, matching how modifier edges already work.
+ * All of them view the single shared position buffer the worker sent.
+ */
+function rebuildModifierFaces(
+  state: ThreeState | null,
+  faces: CadModifierFace[],
+  picking: CadModifierFacePicking | null | undefined,
+  selectedIds: number[],
+  previewActive = false,
+  hoverId: number | null = null,
+) {
+  if (!state) return;
+  disposeChildren(state.modifierLayer);
+  if (!picking || faces.length === 0) {
+    state.needsRender = true;
+    return;
+  }
+  const selected = new Set(selectedIds);
+  const position = new THREE.Float32BufferAttribute(picking.positions, 3);
+  const normal = new THREE.Float32BufferAttribute(picking.normals, 3);
+  faces.forEach((face) => {
+    if (!face.selectable) return;
+    const slice = cadFaceIndexSlice(picking.faceRanges, picking.indices, face.id);
+    if (!slice) return;
+    const geometry = new THREE.BufferGeometry();
+    // Sharing one attribute across every face keeps this to a single upload of
+    // the vertex data no matter how many faces the solid has.
+    geometry.setAttribute("position", position);
+    geometry.setAttribute("normal", normal);
+    geometry.setIndex(new THREE.Uint32BufferAttribute(slice, 1));
+    const active = selected.has(face.id);
+    const hovered = hoverId === face.id;
+    const style = modifierFaceMaterialStyle(active, hovered, previewActive);
+    const material = new THREE.MeshBasicMaterial({
+      color: style.color,
+      transparent: true,
+      opacity: style.opacity,
+      depthTest: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData.modifierFaceId = face.id;
+    mesh.renderOrder = hovered ? 1003 : active ? 1002 : 1001;
+    setObjectRenderLayer(mesh, RENDER_LAYER_MODIFIERS);
+    freezeStaticObjectMatrices(mesh);
+    state.modifierLayer.add(mesh);
+  });
+  state.needsRender = true;
+}
+
+function pickModifierFaceFromScreen(state: ThreeState, clientX: number, clientY: number) {
+  const rect = state.renderer.domElement.getBoundingClientRect();
+  state.pointer.set(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  state.raycaster.setFromCamera(state.pointer, state.camera);
+  state.raycaster.layers.set(RENDER_LAYER_MODIFIERS);
+  const hit = state.raycaster
+    .intersectObjects(state.modifierLayer.children, false)
+    .find((entry) => typeof entry.object.userData.modifierFaceId === "number");
+  return hit ? (hit.object.userData.modifierFaceId as number) : null;
 }
 
 function rebuildSelectionHelpers(

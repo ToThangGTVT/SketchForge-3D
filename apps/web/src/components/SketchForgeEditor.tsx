@@ -40,6 +40,7 @@ import {
   ToolbarImportIcon,
   ToolbarIntersectionIcon,
   ToolbarFilletIcon,
+  ToolbarPushPullIcon,
   ToolbarMirrorIcon,
   ToolbarPasteIcon,
   ToolbarPaintIcon,
@@ -56,6 +57,7 @@ import {
 import { WorkplaneViewport } from "./WorkplaneViewport";
 import { SketchWorkspace, type SketchMeasurement, type SketchSelection, type SketchTool } from "./SketchWorkspace";
 import { EdgeModifierPanel } from "./workplane/EdgeModifierPanel";
+import { FaceModifierPanel } from "./workplane/FaceModifierPanel";
 import {
   canonicalizeShape,
   cloneWorkplaneShapeTreeWithFreshIds,
@@ -81,7 +83,9 @@ import {
   CAD_MODIFIER_REQUEST_TIMEOUT_MS,
   cadModifierPrepareTimeoutMs,
   cadModifierTimeoutMessage,
+  cadModifierDegradedMessage,
   cadModifierWorkerFailureMessage,
+  faceModifierMaxDistance,
   defaultCadModifierTangentChain,
   selectableCadModifierEdge,
   type CadModifierRequestPhase,
@@ -123,7 +127,7 @@ import {
   type SketchForgeMcpShapeSummary,
   type SketchForgeMcpViewFace,
 } from "@/lib/sketchforgeMcpProtocol";
-import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
+import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierFace, CadModifierFacePicking, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
 import type { SketchCadBuildResponse } from "@/lib/sketchCadTypes";
 import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, PaintStroke, ProjectAsset, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
@@ -161,6 +165,23 @@ type EdgeModifierSession = {
 type EdgeModifierComponentPreview = {
   owner: number;
   shape: WorkplaneShape;
+};
+
+/**
+ * Face push/pull shares the CAD worker session with the edge tools, so only one
+ * of the two can be open at a time; `cadModifierModeRef` says which owns it.
+ */
+type FaceModifierSession = {
+  faces: CadModifierFace[];
+  picking: CadModifierFacePicking | null;
+  selectedFaceIds: number[];
+  distance: number;
+  maxDistance: number;
+  quality: CadModifierQuality;
+  busy: boolean;
+  prepared: boolean;
+  error: string | null;
+  preview: WorkplaneShape | null;
 };
 type EdgeFeatureRevertOption = {
   id: string;
@@ -5468,6 +5489,8 @@ export function SketchForgeEditor({
   const [editingSketchShapeId, setEditingSketchShapeId] = useState<string | null>(null);
   const [edgeModifier, setEdgeModifier] = useState<EdgeModifierSession | null>(null);
   const edgeModifierRef = useRef<EdgeModifierSession | null>(null);
+  const [faceModifier, setFaceModifier] = useState<FaceModifierSession | null>(null);
+  const cadModifierModeRef = useRef<"edge" | "face">("edge");
   const cadModifierWorkerRef = useRef<Worker | null>(null);
   const cadModifierPendingRef = useRef(new Map<number, {
     resolve: (message: CadModifierWorkerResponse) => void;
@@ -5571,6 +5594,61 @@ export function SketchForgeEditor({
         }
         return;
       }
+      if (message.type === "ready" && cadModifierModeRef.current === "face") {
+        if (message.requestId !== cadModifierPrepareRef.current) return;
+        const faces = message.faces ?? [];
+        const selectableCount = faces.filter((face) => face.selectable).length;
+        setFaceModifier((current) => current ? {
+          ...current,
+          faces,
+          picking: message.facePicking ?? null,
+          selectedFaceIds: [],
+          busy: false,
+          prepared: true,
+          preview: null,
+          error: selectableCount ? null : "No movable faces were found on this object",
+        } : current);
+        const degraded = cadModifierDegradedMessage(message.degradedParts ?? 0);
+        if (degraded) setNotice(degraded);
+        else if (selectableCount) setNotice("Click a highlighted face, then set the distance");
+        return;
+      }
+      if (message.type === "preview" && cadModifierModeRef.current === "face") {
+        if (message.requestId !== cadModifierLatestPreviewRef.current) return;
+        const base = cadModifierBaseShapeRef.current;
+        const rawPreview = base ? shapeFromCadMesh(base, message.positions, message.normals, message.indices, message.brep) : null;
+        const preview = rawPreview ? {
+          ...rawPreview,
+          cadDisplayEdges: cadDisplayEdgesForShape(rawPreview, message.displayEdges),
+          cadDisplayEdgesVersion: 2 as const,
+        } : null;
+        setFaceModifier((current) => current ? {
+          ...current,
+          preview,
+          busy: false,
+          error: preview ? null : "The CAD kernel returned an empty result",
+        } : current);
+        if (preview) setNotice("Face preview ready");
+        return;
+      }
+      if (message.type === "error" && cadModifierModeRef.current === "face") {
+        if (message.requestId < cadModifierLatestPreviewRef.current) return;
+        if (message.resetSession) {
+          const requestId = cadModifierRequestRef.current + 1;
+          cadModifierRequestRef.current = requestId;
+          cadModifierLatestPreviewRef.current = requestId;
+          cadModifierPrepareRef.current = requestId;
+          cadModifierBaseShapeRef.current = null;
+          cadModifierBaseFingerprintRef.current = "";
+          cadModifierSourcePartsRef.current = [];
+          setFaceModifier(null);
+          setNotice(message.message);
+          return;
+        }
+        setFaceModifier((current) => current ? { ...current, busy: false, preview: null, error: message.message } : current);
+        setNotice("Adjust the distance or face selection");
+        return;
+      }
       if (message.type === "ready") {
         if (message.requestId !== cadModifierPrepareRef.current) return;
         setEdgeModifier((current) => current ? {
@@ -5583,7 +5661,9 @@ export function SketchForgeEditor({
           componentPreviews: [],
           error: message.selectableEdgeIds.length ? null : "No sharp manifold edges were found at this threshold",
         } : current);
-        if (message.selectableEdgeIds.length) setNotice("Select highlighted edges, then adjust the preview");
+        const degradedEdges = cadModifierDegradedMessage(message.degradedParts ?? 0);
+        if (degradedEdges) setNotice(degradedEdges);
+        else if (message.selectableEdgeIds.length) setNotice("Select highlighted edges, then adjust the preview");
         return;
       }
       if (message.type === "preview") {
@@ -5657,6 +5737,7 @@ export function SketchForgeEditor({
     cadModifierBaseFingerprintRef.current = "";
     cadModifierSourcePartsRef.current = [];
     setEdgeModifier(null);
+    setFaceModifier(null);
     return true;
   }, [clearCadModifierWatchdog]);
 
@@ -5847,14 +5928,16 @@ export function SketchForgeEditor({
   const alignHandleStatuses = useMemo(() => (alignMode ? alignmentStatuses(selectedShapes, effectiveAlignAnchorId) : []), [alignMode, effectiveAlignAnchorId, selectedShapes]);
   const viewportShapes = useMemo(
     () =>
-      edgeModifier?.preview && cadModifierBaseShapeRef.current
-        ? shapes.map((shape) => shape.id === cadModifierBaseShapeRef.current?.id ? edgeModifier.preview as WorkplaneShape : shape)
+      (edgeModifier?.preview ?? faceModifier?.preview) && cadModifierBaseShapeRef.current
+        ? shapes.map((shape) => shape.id === cadModifierBaseShapeRef.current?.id
+          ? (edgeModifier?.preview ?? faceModifier?.preview) as WorkplaneShape
+          : shape)
         : alignMode && alignPreview
         ? alignedShapesForSelection(shapes, selectedIds, selectedShapes, effectiveAlignAnchorId, alignPreview.axis, alignPreview.target).nextShapes
         : mirrorMode && mirrorPreviewAxis
           ? mirroredShapesForSelection(shapes, selectedIds, selectedShapes, mirrorPreviewAxis).nextShapes
           : shapes,
-    [alignMode, alignPreview, edgeModifier?.preview, effectiveAlignAnchorId, mirrorMode, mirrorPreviewAxis, selectedIds, selectedShapes, shapes],
+    [alignMode, alignPreview, edgeModifier?.preview, faceModifier?.preview, effectiveAlignAnchorId, mirrorMode, mirrorPreviewAxis, selectedIds, selectedShapes, shapes],
   );
   const sketchReferenceShapes = useMemo(
     () => sketchOperation === "revolve" || placementWorkplaneIsBase(activeSketchWorkplane)
@@ -7159,39 +7242,67 @@ export function SketchForgeEditor({
     setNotice("Select mode");
   }, [invalidateCadModifierSession]);
 
+  /**
+   * Turn a selected shape into the payload the CAD worker's `prepare` step
+   * wants. Shared by the edge tools, the face tool and the MCP entry point so
+   * all three feed the kernel identical geometry.
+   */
+  const buildCadModifierParts = useCallback((shape: WorkplaneShape): (
+    | { ok: true; sourceParts: WorkplaneShape[]; parts: CadModifierMeshPart[]; triangleCount: number; appliedEdgeTreatmentCount: number }
+    | { ok: false; message: string }
+  ) => {
+    const appliedEdgeTreatmentCount = edgeTreatmentFeatureCount(shape);
+    const hasAppliedEdgeTreatment = Boolean(shape.importedMesh && shape.edgeTreatments?.length);
+    const sourceParts = (shape.groupedShapes?.length && !hasAppliedEdgeTreatment
+      ? restoreGroupedChildren(shape)
+      : [shape]).flatMap(cadModifierSourceParts);
+    const partInputs: Array<{ shape: WorkplaneShape; mesh?: MeshData; brep?: string; brepTransform?: number[]; primitive?: CadModifierPrimitivePart }> = sourceParts.map((partShape) => {
+      const frame = partShape.cadBrepFrame;
+      const preserveNeedsRetessellation = preservesEdgeTreatmentSize(partShape) && Boolean(frame) && (
+        Math.abs(shapeWidth(partShape) - (frame?.width ?? shapeWidth(partShape))) > 1e-6 ||
+        Math.abs(shapeDepth(partShape) - (frame?.depth ?? shapeDepth(partShape))) > 1e-6 ||
+        Math.abs(partShape.height - (frame?.height ?? partShape.height)) > 1e-6
+      );
+      const primitive = cadModifierPrimitiveForShape(partShape);
+      if (primitive) return { shape: partShape, primitive };
+      return partShape.cadBrep && frame && !preserveNeedsRetessellation
+        ? { shape: partShape, brep: partShape.cadBrep, brepTransform: cadBrepTransformForShape(partShape) }
+        : { shape: partShape, mesh: meshForShape(partShape) };
+    });
+    const triangleCount = partInputs.reduce((total, part) => total + (part.mesh?.faces.length ?? 0), 0);
+    if (triangleCount === 0 && partInputs.every((part) => !part.brep && !part.primitive)) {
+      return { ok: false, message: "The selected object has no printable surface" };
+    }
+    if (triangleCount > 180_000) {
+      return { ok: false, message: "This mesh is too dense for interactive CAD editing. Simplify it below 180,000 triangles first." };
+    }
+    // The tessellation rides along with the exact routes so the worker can fall
+    // back to it when a stored B-Rep or primitive no longer restores, instead of
+    // refusing to open the tool. Shapes on those routes are already `kind:
+    // "mesh"`, so building it is a cheap transform of stored positions.
+    const parts: CadModifierMeshPart[] = partInputs.map((part) => {
+      const hole = Boolean(part.shape.hole);
+      const fallback = meshDataToCadTransfer(part.mesh ?? meshForShape(part.shape));
+      if (part.brep) return { ...fallback, brep: part.brep, brepTransform: part.brepTransform, hole };
+      if (part.primitive) return { ...fallback, primitive: part.primitive, hole };
+      return { ...fallback, hole };
+    });
+    return { ok: true, sourceParts, parts, triangleCount, appliedEdgeTreatmentCount };
+  }, []);
+
   const startEdgeModifier = useCallback((kind: CadModifierKind) => {
     if (selectedShapes.length !== 1 || !selectedShape || selectedShape.locked || selectedShape.hole) {
       setNotice(`Select one unlocked solid to ${kind}`);
       return;
     }
     invalidateCadModifierSession();
-    const appliedEdgeTreatmentCount = edgeTreatmentFeatureCount(selectedShape);
-    const hasAppliedEdgeTreatment = Boolean(selectedShape.importedMesh && selectedShape.edgeTreatments?.length);
-    const sourceParts = (selectedShape.groupedShapes?.length && !hasAppliedEdgeTreatment
-      ? restoreGroupedChildren(selectedShape)
-      : [selectedShape]).flatMap(cadModifierSourceParts);
-    const partInputs: Array<{ shape: WorkplaneShape; mesh?: MeshData; brep?: string; brepTransform?: number[]; primitive?: CadModifierPrimitivePart }> = sourceParts.map((shape) => {
-      const frame = shape.cadBrepFrame;
-      const preserveNeedsRetessellation = preservesEdgeTreatmentSize(shape) && Boolean(frame) && (
-        Math.abs(shapeWidth(shape) - (frame?.width ?? shapeWidth(shape))) > 1e-6 ||
-        Math.abs(shapeDepth(shape) - (frame?.depth ?? shapeDepth(shape))) > 1e-6 ||
-        Math.abs(shape.height - (frame?.height ?? shape.height)) > 1e-6
-      );
-      const primitive = cadModifierPrimitiveForShape(shape);
-      if (primitive) return { shape, primitive };
-      return shape.cadBrep && frame && !preserveNeedsRetessellation
-        ? { shape, brep: shape.cadBrep, brepTransform: cadBrepTransformForShape(shape) }
-        : { shape, mesh: meshForShape(shape) };
-    });
-    const triangleCount = partInputs.reduce((total, part) => total + (part.mesh?.faces.length ?? 0), 0);
-    if (triangleCount === 0 && partInputs.every((part) => !part.brep && !part.primitive)) {
-      setNotice("The selected object has no printable surface");
+    cadModifierModeRef.current = "edge";
+    const built = buildCadModifierParts(selectedShape);
+    if (!built.ok) {
+      setNotice(built.message);
       return;
     }
-    if (triangleCount > 180_000) {
-      setNotice("This mesh is too dense for interactive edge treatment. Simplify it below 180,000 triangles first.");
-      return;
-    }
+    const { sourceParts, parts, triangleCount, appliedEdgeTreatmentCount } = built;
     const amount = Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(1, shapeWidth(selectedShape) / 6, shapeDepth(selectedShape) / 6, selectedShape.height / 6));
     cadModifierBaseShapeRef.current = selectedShape;
     cadModifierBaseFingerprintRef.current = projectShapesFingerprint([selectedShape]);
@@ -7215,11 +7326,6 @@ export function SketchForgeEditor({
       componentPreviews: [],
     });
     setNotice(`Preparing ${kind} edges in the CAD worker`);
-    const parts: CadModifierMeshPart[] = partInputs.map((part) => {
-      if (part.brep) return { brep: part.brep, brepTransform: part.brepTransform, hole: Boolean(part.shape.hole) };
-      if (part.primitive) return { primitive: part.primitive, hole: Boolean(part.shape.hole) };
-      return { ...meshDataToCadTransfer(part.mesh as MeshData), hole: Boolean(part.shape.hole) };
-    });
     const prepareRequestId = postCadModifierRequest({
       type: "prepare",
       parts,
@@ -7234,42 +7340,155 @@ export function SketchForgeEditor({
     }
     cadModifierPrepareRef.current = prepareRequestId;
     armCadModifierWatchdog(prepareRequestId, "prepare", cadModifierPrepareTimeoutMs(triangleCount));
-  }, [armCadModifierWatchdog, invalidateCadModifierSession, postCadModifierRequest, selectedShape, selectedShapes.length]);
+  }, [armCadModifierWatchdog, buildCadModifierParts, invalidateCadModifierSession, postCadModifierRequest, selectedShape, selectedShapes.length]);
+
+  const startFaceModifier = useCallback(() => {
+    if (selectedShapes.length !== 1 || !selectedShape || selectedShape.locked || selectedShape.hole) {
+      setNotice("Select one unlocked solid to push or pull a face");
+      return;
+    }
+    invalidateCadModifierSession();
+    cadModifierModeRef.current = "face";
+    const built = buildCadModifierParts(selectedShape);
+    if (!built.ok) {
+      setNotice(built.message);
+      return;
+    }
+    const { sourceParts, parts, triangleCount } = built;
+    const maxDistance = faceModifierMaxDistance(shapeWidth(selectedShape), shapeDepth(selectedShape), selectedShape.height);
+    cadModifierBaseShapeRef.current = selectedShape;
+    cadModifierBaseFingerprintRef.current = projectShapesFingerprint([selectedShape]);
+    cadModifierSourcePartsRef.current = sourceParts;
+    setAlignMode(false);
+    setMirrorMode(false);
+    setFaceModifier({
+      faces: [],
+      picking: null,
+      selectedFaceIds: [],
+      distance: 0,
+      maxDistance,
+      quality: "standard",
+      busy: true,
+      prepared: false,
+      error: null,
+      preview: null,
+    });
+    setNotice("Preparing faces in the CAD worker");
+    const prepareRequestId = postCadModifierRequest({
+      type: "prepare",
+      parts,
+      sharpAngle: 25,
+      includeFaces: true,
+    }, parts.flatMap((part) => part.positions && part.indices ? [part.positions.buffer, part.indices.buffer] : []));
+    if (prepareRequestId === null) {
+      const message = cadModifierWorkerFailureMessage();
+      setFaceModifier((current) => current ? { ...current, busy: false, prepared: false, error: message } : current);
+      setNotice(message);
+      return;
+    }
+    cadModifierPrepareRef.current = prepareRequestId;
+    armCadModifierWatchdog(prepareRequestId, "prepare", cadModifierPrepareTimeoutMs(triangleCount));
+  }, [armCadModifierWatchdog, buildCadModifierParts, invalidateCadModifierSession, postCadModifierRequest, selectedShape, selectedShapes.length]);
+
+  const cancelFaceModifier = useCallback(() => {
+    if (invalidateCadModifierSession()) setNotice("Push/pull cancelled");
+  }, [invalidateCadModifierSession]);
+
+  const toggleModifierFace = useCallback((id: number, additive: boolean) => {
+    setFaceModifier((current) => {
+      if (!current) return current;
+      const face = current.faces.find((entry) => entry.id === id);
+      if (!face?.selectable) return current;
+      const already = current.selectedFaceIds.includes(id);
+      // Plain click replaces the selection; Shift builds one up, matching the
+      // edge tool's modifier behaviour.
+      const selectedFaceIds = additive
+        ? already
+          ? current.selectedFaceIds.filter((entry) => entry !== id)
+          : [...current.selectedFaceIds, id]
+        : already && current.selectedFaceIds.length === 1
+          ? []
+          : [id];
+      return { ...current, selectedFaceIds, error: null };
+    });
+  }, []);
+
+  const clearModifierFaces = useCallback(() => {
+    setFaceModifier((current) => current ? { ...current, selectedFaceIds: [], preview: null, error: null } : current);
+  }, []);
+
+  const applyFaceModifier = useCallback(() => {
+    const base = cadModifierBaseShapeRef.current;
+    if (!faceModifier?.preview || !base) {
+      setNotice("Wait for a valid preview before applying");
+      return;
+    }
+    const faceCount = faceModifier.selectedFaceIds.length;
+    const previewShape = canonicalizeShape({
+      ...faceModifier.preview,
+      cadDisplayEdgesVersion: 2,
+    });
+    const modifiedShape = bakedEdgeTreatmentPreview(previewShape, base);
+    commitShapes(
+      shapes.map((shape) => shape.id === base.id ? modifiedShape : shape),
+      base.id,
+      `${faceModifier.distance > 0 ? "Pulled" : "Pushed"} ${faceCount} face${faceCount === 1 ? "" : "s"}`,
+    );
+    invalidateCadModifierSession();
+  }, [commitShapes, faceModifier, invalidateCadModifierSession, shapes]);
+
+  useEffect(() => {
+    if (!faceModifier?.prepared) return;
+    if (faceModifier.selectedFaceIds.length === 0 || faceModifier.distance === 0) {
+      setFaceModifier((current) => current && current.preview ? { ...current, preview: null } : current);
+      return;
+    }
+    // Debounced so dragging the distance slider does not queue a request per
+    // pixel; each new request supersedes the last.
+    const timer = window.setTimeout(() => {
+      const requestId = postCadModifierRequest({
+        type: "facePreview",
+        faceIds: faceModifier.selectedFaceIds,
+        distance: faceModifier.distance,
+        quality: faceModifier.quality,
+      });
+      if (requestId === null) {
+        const message = cadModifierWorkerFailureMessage();
+        setFaceModifier((current) => current ? { ...current, busy: false, prepared: false, preview: null, error: message } : current);
+        setNotice(message);
+        return;
+      }
+      cadModifierLatestPreviewRef.current = requestId;
+      armCadModifierWatchdog(requestId, "preview");
+      setFaceModifier((current) => current ? { ...current, busy: true, error: null } : current);
+    }, 160);
+    return () => window.clearTimeout(timer);
+  }, [armCadModifierWatchdog, faceModifier?.distance, faceModifier?.prepared, faceModifier?.quality, faceModifier?.selectedFaceIds, postCadModifierRequest]);
+
+  useEffect(() => {
+    if (!faceModifier) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelFaceModifier();
+      } else if (event.key === "Enter" && faceModifier.preview && !faceModifier.busy && !faceModifier.error) {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target?.closest("input, select, textarea, button, [contenteditable='true']")) return;
+        event.preventDefault();
+        applyFaceModifier();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applyFaceModifier, cancelFaceModifier, faceModifier]);
 
   const prepareCadModifierForMcp = useCallback(async (shape: WorkplaneShape, sharpAngle: number) => {
     if (shape.locked || shape.hole) {
       throw new Error("Select one unlocked solid object for edge treatment");
     }
-    const appliedEdgeTreatmentCount = edgeTreatmentFeatureCount(shape);
-    const hasAppliedEdgeTreatment = Boolean(shape.importedMesh && shape.edgeTreatments?.length);
-    const sourceParts = (shape.groupedShapes?.length && !hasAppliedEdgeTreatment
-      ? restoreGroupedChildren(shape)
-      : [shape]).flatMap(cadModifierSourceParts);
-    const partInputs: Array<{ shape: WorkplaneShape; mesh?: MeshData; brep?: string; brepTransform?: number[]; primitive?: CadModifierPrimitivePart }> = sourceParts.map((partShape) => {
-      const frame = partShape.cadBrepFrame;
-      const preserveNeedsRetessellation = preservesEdgeTreatmentSize(partShape) && Boolean(frame) && (
-        Math.abs(shapeWidth(partShape) - (frame?.width ?? shapeWidth(partShape))) > 1e-6 ||
-        Math.abs(shapeDepth(partShape) - (frame?.depth ?? shapeDepth(partShape))) > 1e-6 ||
-        Math.abs(partShape.height - (frame?.height ?? partShape.height)) > 1e-6
-      );
-      const primitive = cadModifierPrimitiveForShape(partShape);
-      if (primitive) return { shape: partShape, primitive };
-      return partShape.cadBrep && frame && !preserveNeedsRetessellation
-        ? { shape: partShape, brep: partShape.cadBrep, brepTransform: cadBrepTransformForShape(partShape) }
-        : { shape: partShape, mesh: meshForShape(partShape) };
-    });
-    const triangleCount = partInputs.reduce((total, part) => total + (part.mesh?.faces.length ?? 0), 0);
-    if (triangleCount === 0 && partInputs.every((part) => !part.brep && !part.primitive)) {
-      throw new Error("The selected object has no printable surface");
-    }
-    if (triangleCount > 180_000) {
-      throw new Error("This mesh is too dense for interactive edge treatment. Simplify it below 180,000 triangles first.");
-    }
-    const parts: CadModifierMeshPart[] = partInputs.map((part) => {
-      if (part.brep) return { brep: part.brep, brepTransform: part.brepTransform, hole: Boolean(part.shape.hole) };
-      if (part.primitive) return { primitive: part.primitive, hole: Boolean(part.shape.hole) };
-      return { ...meshDataToCadTransfer(part.mesh as MeshData), hole: Boolean(part.shape.hole) };
-    });
+    const built = buildCadModifierParts(shape);
+    if (!built.ok) throw new Error(built.message);
+    const { sourceParts, parts, triangleCount, appliedEdgeTreatmentCount } = built;
     const transfer = parts.flatMap((part) => part.positions && part.indices ? [part.positions.buffer as Transferable, part.indices.buffer as Transferable] : []);
     const response = await postCadModifierRequestAsync({
       type: "prepare",
@@ -7281,7 +7500,7 @@ export function SketchForgeEditor({
       throw new Error("The CAD worker did not return an edge list");
     }
     return { response, sourceParts };
-  }, [postCadModifierRequestAsync]);
+  }, [buildCadModifierParts, postCadModifierRequestAsync]);
 
   const applyCadModifierForMcp = useCallback(async (
     shape: WorkplaneShape,
@@ -8954,6 +9173,8 @@ export function SketchForgeEditor({
         canDrill={selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
         canEdgeModify={selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
         edgeModifierKind={edgeModifier?.kind ?? null}
+        facePushPullActive={Boolean(faceModifier)}
+        onPushPull={() => faceModifier ? cancelFaceModifier() : startFaceModifier()}
         mirrorMode={mirrorMode}
         paintMode={paintMode}
         paintColor={paintColor}
@@ -9092,10 +9313,15 @@ export function SketchForgeEditor({
           onWorkspaceSettingsChange={updateProjectWorkspaceSettings}
           onWorkplaneModeChange={closeViewportWorkplaneMode}
           modifierActive={Boolean(edgeModifier)}
-          modifierPreviewActive={Boolean(edgeModifier?.preview)}
+          modifierPreviewActive={Boolean(edgeModifier?.preview ?? faceModifier?.preview)}
           modifierEdges={edgeModifier?.edges.filter((edge) => modifierAvailableEdgeIds.includes(edge.id)) ?? []}
           selectedModifierEdgeIds={edgeModifier?.selectedEdgeIds ?? []}
           onModifierEdgeToggle={toggleModifierEdge}
+          faceModifierActive={Boolean(faceModifier)}
+          modifierFaces={faceModifier?.faces ?? []}
+          modifierFacePicking={faceModifier?.picking ?? null}
+          selectedModifierFaceIds={faceModifier?.selectedFaceIds ?? []}
+          onModifierFaceToggle={toggleModifierFace}
           challengeTutorial={challengeTutorial}
           onChallengeTutorialFinish={onChallengeTutorialFinish}
           themePreference={themePreference}
@@ -9104,6 +9330,27 @@ export function SketchForgeEditor({
           />
         )}
       </div>
+      {faceModifier ? (
+        <FaceModifierPanel
+          distance={faceModifier.distance}
+          maxDistance={faceModifier.maxDistance}
+          quality={faceModifier.quality}
+          workspace={workspaceSettings}
+          targetName={selectedShape?.name ?? "Object"}
+          selectedCount={faceModifier.selectedFaceIds.length}
+          availableCount={faceModifier.faces.filter((face) => face.selectable).length}
+          busy={faceModifier.busy}
+          prepared={faceModifier.prepared}
+          error={faceModifier.error}
+          onDistanceChange={(value) => setFaceModifier((current) => current?.prepared
+            ? { ...current, distance: Math.max(-current.maxDistance, Math.min(current.maxDistance, value)), preview: null, error: null }
+            : current)}
+          onClear={clearModifierFaces}
+          onQualityChange={(quality) => setFaceModifier((current) => current?.prepared ? { ...current, quality, preview: null, error: null } : current)}
+          onApply={applyFaceModifier}
+          onCancel={cancelFaceModifier}
+        />
+      ) : null}
       {edgeModifier ? (
         <EdgeModifierPanel
           kind={edgeModifier.kind}
@@ -9257,6 +9504,8 @@ function SecondaryToolbar({
   canApplyDrill,
   canEdgeModify,
   edgeModifierKind,
+  facePushPullActive,
+  onPushPull,
   canGroup,
   canIntersect,
   canRedo,
@@ -9319,6 +9568,8 @@ function SecondaryToolbar({
   canApplyDrill: boolean;
   canEdgeModify: boolean;
   edgeModifierKind: CadModifierKind | null;
+  facePushPullActive: boolean;
+  onPushPull: () => void;
   canGroup: boolean;
   canIntersect: boolean;
   canRedo: boolean;
@@ -9537,13 +9788,14 @@ function SecondaryToolbar({
         onSelect();
       },
       enabled: true,
-      active: !paintOpen && !alignMode && !mirrorMode && !paintMode && !edgeModifierKind,
+      active: !paintOpen && !alignMode && !mirrorMode && !paintMode && !edgeModifierKind && !facePushPullActive,
     },
     { label: "Align", icon: ToolbarAlignIcon, action: onAlign, enabled: canAlign, active: alignMode },
     { label: "Mirror", icon: ToolbarMirrorIcon, action: onMirror, enabled: hasSelection, active: mirrorMode },
     { label: "Snap to grid", icon: ToolbarSnapGridIcon, action: onSnap, enabled: hasSelection },
     { label: "Chamfer", icon: ToolbarChamferIcon, action: onChamfer, enabled: canEdgeModify, active: edgeModifierKind === "chamfer" },
     { label: "Fillet", icon: ToolbarFilletIcon, action: onFillet, enabled: canEdgeModify, active: edgeModifierKind === "fillet" },
+    { label: "Push / pull face", icon: ToolbarPushPullIcon, action: onPushPull, enabled: canEdgeModify, active: facePushPullActive },
   ];
   const arrangeTools = [
     { label: "Drop to workplane", icon: ToolbarDropToWorkplaneIcon, action: onDropToWorkplane, enabled: hasSelection },

@@ -1,18 +1,24 @@
 /// <reference lib="webworker" />
 
 import { OcctKernel, type ShapeHandle } from "occt-wasm";
-import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import { CAD_MODIFIER_RUNTIME_BASE, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
+import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierFace, CadModifierFacePicking, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
+import { CAD_MODIFIER_RUNTIME_BASE, cadFaceRangesFromGroups, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
+import { FacePushPullError, outwardFaceNormal, pushPullFaces } from "@/lib/facePushPull";
 
 const HASH_UPPER_BOUND = 2_147_483_647;
 const CAD_EDGE_WIREFRAME_DEFLECTION = 0.035;
 const CAD_DISPLAY_EDGE_MIN_ANGLE = 0.75;
 const CURVED_SURFACE_TYPES = new Set(["cylinder", "cone", "sphere", "torus", "bspline", "bezier", "offset", "revolution", "extrusion"]);
+const CAD_FACE_PICK_LINEAR_DEFLECTION = 0.05;
+const CAD_FACE_PICK_ANGULAR_DEFLECTION = 0.25;
 let kernelPromise: Promise<OcctKernel> | null = null;
 let baseShape: ShapeHandle | null = null;
 let baseSolids: ShapeHandle[] = [];
 let edgeHandles: ShapeHandle[] = [];
 let edgeOwners: number[] = [];
+let degradedPartCount = 0;
+let faceHandles: ShapeHandle[] = [];
+let faceOwners: number[] = [];
 
 type CollectedCadEdgeGeometry = Omit<CadModifierEdge, "display" | "selectable"> & {
   curveType: string;
@@ -46,6 +52,8 @@ function releaseSession(cad: OcctKernel) {
   baseSolids = [];
   edgeHandles = [];
   edgeOwners = [];
+  faceHandles = [];
+  faceOwners = [];
 }
 
 function cadShapeIsValid(cad: OcctKernel, shape: ShapeHandle) {
@@ -183,25 +191,49 @@ function reconstructPrimitiveSolid(cad: OcctKernel, primitive: CadModifierPrimit
   return transformed;
 }
 
-function reconstructSolid(cad: OcctKernel, part: CadModifierMeshPart) {
-  if (part.primitive) {
-    return reconstructPrimitiveSolid(cad, part.primitive);
+function reconstructExactSolid(cad: OcctKernel, part: CadModifierMeshPart & { brep: string }) {
+  let exact = cad.fromBREP(part.brep);
+  if (part.brepTransform?.length === 12) exact = cad.generalTransform(exact, part.brepTransform);
+  const restoredSolids = cad.getSubShapes(exact, "solid");
+  if (cadShapeIsValid(cad, exact) && (cad.isSolid(exact) || restoredSolids.length > 0)) {
+    return restoredSolids.length === 1 ? restoredSolids[0] : exact;
   }
-  if (part.brep) {
-    let exact = cad.fromBREP(part.brep);
-    if (part.brepTransform?.length === 12) exact = cad.generalTransform(exact, part.brepTransform);
-    const restoredSolids = cad.getSubShapes(exact, "solid");
-    if (cadShapeIsValid(cad, exact) && (cad.isSolid(exact) || restoredSolids.length > 0)) {
-      return restoredSolids.length === 1 ? restoredSolids[0] : exact;
+  exact = cad.fixShape(exact);
+  exact = cad.fixFaceOrientations(exact);
+  if (cad.isSolid(exact)) exact = cad.healSolid(exact, 1e-5);
+  const healedSolids = cad.getSubShapes(exact, "solid");
+  if (cadShapeIsValid(cad, exact) && (cad.isSolid(exact) || healedSolids.length > 0)) {
+    return healedSolids.length === 1 ? healedSolids[0] : exact;
+  }
+  throw new Error("The stored CAD feature could not be restored as a valid solid");
+}
+
+/**
+ * Rebuild one part as a CAD solid.
+ *
+ * The exact routes (stored B-Rep, analytic primitive) are tried first because
+ * they carry real curved surfaces. When one fails — a transform that degenerates
+ * the geometry, a B-Rep that no longer matches its frame — we fall back to the
+ * part's tessellation rather than refusing to open the tool at all. The result
+ * is faceted instead of exact, so `degradedPartCount` records it and the editor
+ * tells the user why the surfaces look coarse.
+ */
+function reconstructSolid(cad: OcctKernel, part: CadModifierMeshPart) {
+  const canFallBackToMesh = Boolean(part.positions?.length && part.indices?.length);
+  if (part.primitive) {
+    try {
+      return reconstructPrimitiveSolid(cad, part.primitive);
+    } catch (error) {
+      if (!canFallBackToMesh) throw error;
+      degradedPartCount += 1;
     }
-    exact = cad.fixShape(exact);
-    exact = cad.fixFaceOrientations(exact);
-    if (cad.isSolid(exact)) exact = cad.healSolid(exact, 1e-5);
-    const healedSolids = cad.getSubShapes(exact, "solid");
-    if (cadShapeIsValid(cad, exact) && (cad.isSolid(exact) || healedSolids.length > 0)) {
-      return healedSolids.length === 1 ? healedSolids[0] : exact;
+  } else if (part.brep) {
+    try {
+      return reconstructExactSolid(cad, { ...part, brep: part.brep });
+    } catch (error) {
+      if (!canFallBackToMesh) throw error;
+      degradedPartCount += 1;
     }
-    throw new Error("The stored CAD feature could not be restored as a valid solid");
   }
   const imported = cad.importStl(meshPartToAsciiStl(part));
   let shape = cad.fixShape(imported);
@@ -359,6 +391,99 @@ function collectEdges(cad: OcctKernel, shape: ShapeHandle, sharpAngle: number, s
   }
 }
 
+/** Smallest face the user can realistically aim at, in square millimetres. */
+const CAD_FACE_MIN_SELECTABLE_AREA = 1e-6;
+
+/**
+ * Face descriptors plus the one tessellation the viewport uses to both draw the
+ * highlight and hit-test clicks.
+ *
+ * `meshShape` reports its groups as `[indexStart, indexCount, faceHash]`. Those
+ * are offsets into the index buffer, not triangle numbers, despite the naming —
+ * treating them as triangles selects the wrong face for every click.
+ */
+function collectFaces(cad: OcctKernel, shape: ShapeHandle, handles: ShapeHandle[], owners: number[], solids: ShapeHandle[]) {
+  const mesh = cad.meshShape(shape, {
+    linearDeflection: CAD_FACE_PICK_LINEAR_DEFLECTION,
+    angularDeflection: CAD_FACE_PICK_ANGULAR_DEFLECTION,
+  });
+  const faceHashes = handles.map((handle) => cad.hashCode(handle, HASH_UPPER_BOUND));
+  const faceRanges = cadFaceRangesFromGroups(mesh.faceGroups, faceHashes);
+
+  const faces: CadModifierFace[] = handles.map((handle, id) => {
+    const triangleIndexCount = faceRanges[id * 2 + 1];
+    const owner = owners[id] ?? 0;
+    const ownerSolid = solids[owner] ?? shape;
+    let area = 0;
+    try {
+      area = Math.abs(cad.getSurfaceArea(handle));
+    } catch {
+      area = 0;
+    }
+    let surfaceType = "unknown";
+    try {
+      surfaceType = cad.surfaceType(handle);
+    } catch {
+      surfaceType = "unknown";
+    }
+    let centroid: [number, number, number] = [0, 0, 0];
+    let normal: [number, number, number] = [0, 1, 0];
+    let oriented = false;
+    try {
+      const center = cad.getSurfaceCenterOfMass(handle);
+      centroid = [center.x, center.y, center.z];
+      const direction = outwardFaceNormal(cad, ownerSolid, handle);
+      normal = [direction.x, direction.y, direction.z];
+      oriented = true;
+    } catch {
+      // Degenerate or self-intersecting faces have no usable direction; they
+      // stay in the list so the mesh renders, but cannot be pushed.
+      oriented = false;
+    }
+    return {
+      id,
+      owner,
+      centroid,
+      normal,
+      area,
+      surfaceType,
+      selectable: oriented && area > CAD_FACE_MIN_SELECTABLE_AREA && triangleIndexCount >= 3,
+    } satisfies CadModifierFace;
+  });
+
+  const picking: CadModifierFacePicking = {
+    positions: new Float32Array(mesh.positions),
+    normals: new Float32Array(mesh.normals),
+    indices: new Uint32Array(mesh.indices),
+    faceRanges,
+  };
+  return { faces, picking };
+}
+
+function mapSubShapeOwners(cad: OcctKernel, handles: ShapeHandle[], solids: ShapeHandle[], type: "edge" | "face", label: string) {
+  const ownerSubShapes = solids.map((solid) => cad.getSubShapes(solid, type));
+  try {
+    const candidates = new Map<number, Array<{ owner: number; handle: ShapeHandle }>>();
+    ownerSubShapes.forEach((componentShapes, owner) => {
+      componentShapes.forEach((handle) => {
+        const hash = cad.hashCode(handle, HASH_UPPER_BOUND);
+        const bucket = candidates.get(hash) ?? [];
+        bucket.push({ owner, handle });
+        candidates.set(hash, bucket);
+      });
+    });
+    return handles.map((handle) => {
+      const hash = cad.hashCode(handle, HASH_UPPER_BOUND);
+      const bucket = candidates.get(hash) ?? [];
+      const exact = bucket.find((candidate) => cad.isSame(handle, candidate.handle));
+      if (!exact) throw new Error(`A CAD ${label} could not be mapped to its solid component; restart the tool`);
+      return exact.owner;
+    });
+  } finally {
+    ownerSubShapes.forEach((componentShapes) => releaseHandles(cad, componentShapes));
+  }
+}
+
 function cadDisplayEdgesFromCollected(edges: CollectedCadEdge[]): CadModifierDisplayEdge[] {
   return edges
     .filter((edge) => edge.display)
@@ -401,31 +526,21 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
     }
     if (request.type === "prepare") {
       releaseSession(activeCad);
+      degradedPartCount = 0;
       baseShape = reconstructParts(activeCad, request.parts);
       const collected = collectEdges(activeCad, baseShape, request.sharpAngle, Boolean(request.suppressTreatmentDetailEdges), true);
       edgeHandles = collected.handles;
       baseSolids = activeCad.isSolid(baseShape) ? [baseShape] : activeCad.getSubShapes(baseShape, "solid");
       if (baseSolids.length === 0) throw new Error("The selected group contains no closed solid components");
-      const ownerEdgeHandles = baseSolids.map((solid) => activeCad.getSubShapes(solid, "edge"));
-      try {
-        const ownerCandidates = new Map<number, Array<{ owner: number; edge: ShapeHandle }>>();
-        ownerEdgeHandles.forEach((componentEdges, owner) => {
-          componentEdges.forEach((edge) => {
-            const hash = activeCad.hashCode(edge, HASH_UPPER_BOUND);
-            const candidates = ownerCandidates.get(hash) ?? [];
-            candidates.push({ owner, edge });
-            ownerCandidates.set(hash, candidates);
-          });
-        });
-        edgeOwners = edgeHandles.map((edge) => {
-          const hash = activeCad.hashCode(edge, HASH_UPPER_BOUND);
-          const candidates = ownerCandidates.get(hash) ?? [];
-          const exact = candidates.find((candidate) => activeCad.isSame(edge, candidate.edge));
-          if (!exact) throw new Error("A CAD edge could not be mapped to its solid component; restart the edge tool");
-          return exact.owner;
-        });
-      } finally {
-        ownerEdgeHandles.forEach((componentEdges) => releaseHandles(activeCad, componentEdges));
+      edgeOwners = mapSubShapeOwners(activeCad, edgeHandles, baseSolids, "edge", "edge");
+      let faces: CadModifierFace[] | undefined;
+      let facePicking: CadModifierFacePicking | undefined;
+      if (request.includeFaces) {
+        faceHandles = activeCad.getSubShapes(baseShape, "face");
+        faceOwners = mapSubShapeOwners(activeCad, faceHandles, baseSolids, "face", "face");
+        const collectedFaces = collectFaces(activeCad, baseShape, faceHandles, faceOwners, baseSolids);
+        faces = collectedFaces.faces;
+        facePicking = collectedFaces.picking;
       }
       post({
         type: "ready",
@@ -433,10 +548,63 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
         edges: collected.edges.map((edge) => ({ ...edge, owner: edgeOwners[edge.id] ?? 0 })),
         selectableEdgeIds: collected.selectableEdgeIds,
         sourceType: activeCad.getShapeType(baseShape),
-      });
+        degradedParts: degradedPartCount,
+        faces,
+        facePicking,
+      }, facePicking ? [facePicking.positions.buffer, facePicking.normals.buffer, facePicking.indices.buffer, facePicking.faceRanges.buffer] : []);
       return;
     }
     if (baseShape === null) throw new Error("Prepare an object before previewing the modifier");
+
+    if (request.type === "facePreview") {
+      const selectedFaces = request.faceIds
+        .map((id) => ({ face: faceHandles[id], owner: faceOwners[id] ?? 0 }))
+        .filter((entry): entry is { face: ShapeHandle; owner: number } => entry.face !== undefined);
+      if (selectedFaces.length === 0) throw new Error("Select at least one highlighted face");
+      const componentResults: ShapeHandle[] = [];
+      let result: ShapeHandle | null = null;
+      try {
+        for (let owner = 0; owner < baseSolids.length; owner += 1) {
+          const solid = baseSolids[owner];
+          const ownerFaces = selectedFaces.filter((entry) => entry.owner === owner).map((entry) => entry.face);
+          componentResults.push(ownerFaces.length === 0
+            ? activeCad.copy(solid)
+            : pushPullFaces(activeCad, solid, ownerFaces, request.distance));
+        }
+        result = componentResults.length === 1 ? componentResults[0] : activeCad.makeCompound(componentResults);
+        if (!cadShapeIsValid(activeCad, result)) throw new Error("This distance creates invalid geometry");
+        const options = tessellationOptions(request.quality, Math.abs(request.distance));
+        const mesh = copyCadMesh(activeCad.tessellate(result, options));
+        const displayEdges = collectEdges(activeCad, result, 0).displayEdges;
+        const brep = activeCad.toBREP(result);
+        const components: CadModifierComponentMesh[] = componentResults.map((component, owner) => {
+          const componentMesh = copyCadMesh(activeCad.tessellate(component, options));
+          return {
+            owner,
+            positions: componentMesh.positions,
+            normals: componentMesh.normals,
+            indices: componentMesh.indices,
+            triangleCount: componentMesh.triangleCount,
+            brep: activeCad.toBREP(component),
+            displayEdges: collectEdges(activeCad, component, 0).displayEdges,
+          };
+        });
+        post(
+          { type: "preview", requestId: request.requestId, positions: mesh.positions, normals: mesh.normals, indices: mesh.indices, triangleCount: mesh.triangleCount, brep, displayEdges, components },
+          [
+            mesh.positions.buffer,
+            mesh.normals.buffer,
+            mesh.indices.buffer,
+            ...components.flatMap((component) => [component.positions.buffer, component.normals.buffer, component.indices.buffer]),
+          ],
+        );
+      } finally {
+        componentResults.forEach((component) => activeCad.release(component));
+        if (result !== null && componentResults.length > 1) activeCad.release(result);
+      }
+      return;
+    }
+
     const selected = request.edgeIds.map((id) => ({ edge: edgeHandles[id], owner: edgeOwners[id] })).filter((entry): entry is { edge: ShapeHandle; owner: number } => entry.edge !== undefined);
     if (selected.length === 0) throw new Error("Select at least one highlighted edge");
     const componentResults: ShapeHandle[] = [];
@@ -504,9 +672,16 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
       });
       return;
     }
-    const message = request.type === "preview" && (rawMessage.includes("WebAssembly.Exception") || rawMessage.includes("fillet:") || rawMessage.includes("chamfer:"))
+    const isKernelTrap = rawMessage.includes("WebAssembly.Exception");
+    const message = request.type === "preview" && (isKernelTrap || rawMessage.includes("fillet:") || rawMessage.includes("chamfer:"))
       ? `The selected edges cannot be ${request.kind === "fillet" ? "filleted" : "chamfered"} together at this size. Reduce the size or select fewer connected edges.`
-      : rawMessage || "The CAD kernel could not complete this edge treatment";
+      : request.type === "facePreview"
+        // FacePushPullError already carries a specific, user-facing reason;
+        // only a raw kernel trap needs translating.
+        ? (error instanceof FacePushPullError ? rawMessage : isKernelTrap
+          ? "The selected faces cannot be moved this far. Reduce the distance or select fewer faces."
+          : rawMessage || "The CAD kernel could not move these faces")
+        : rawMessage || "The CAD kernel could not complete this edge treatment";
     if (request.type === "prepare" && cad) releaseSession(cad);
     post({ type: "error", requestId: request.requestId, message });
   }
