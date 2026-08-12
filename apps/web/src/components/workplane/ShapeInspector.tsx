@@ -24,6 +24,7 @@ import {
 import { displayStepFromMillimeters, displayToMillimeters, formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, parseMeasurementInput } from "@/lib/measurementUnits";
 import { resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { normalizeSketchRevolveSettings } from "@/lib/sketchRevolve";
+import { gameMaterialForShape } from "@/lib/gameMaterial";
 import type { GearType, GridSize, MeasurementAccuracy, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 const GRID_SIZES: GridSize[] = ["Off", "0.1 mm", "0.25 mm", "0.5 mm", "1.0 mm", "2.0 mm", "5.0 mm", "Brick"];
@@ -359,11 +360,14 @@ export function ShapeInspector({
   const isSketchRevolve = shape.sketchOperation === "revolve" || Boolean(shape.sketchRevolve);
   const inspectorRef = useRef<HTMLElement>(null);
   const [propertiesOpen, setPropertiesOpen] = useState(true);
+  const [materialOpen, setMaterialOpen] = useState(true);
   const [gearTeethOpen, setGearTeethOpen] = useState(true);
   const [gearHelixOpen, setGearHelixOpen] = useState(true);
   const [colorOpen, setColorOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const customColorInputRef = useRef<HTMLInputElement>(null);
+  const gameMaterial = gameMaterialForShape(shape);
+  const updateMaterial = (patch: Partial<typeof gameMaterial>) => onUpdate({ material: { ...gameMaterial, ...patch } });
 
   useEffect(() => () => onInteractionActiveChange?.(false), [onInteractionActiveChange]);
   useEffect(() => {
@@ -487,6 +491,51 @@ export function ShapeInspector({
           <Split size={17} strokeWidth={2.5} />
           <span>Separate Parts</span>
         </button>
+      ) : null}
+
+      {!shape.hole ? (
+        <div className={`property-card ${materialOpen ? "" : "collapsed"}`}>
+          <button
+            className="property-card-header"
+            type="button"
+            aria-expanded={materialOpen}
+            aria-controls={`material-${shape.id}`}
+            onClick={() => setMaterialOpen((open) => !open)}
+          >
+            <span>Game Material</span>
+            <ChevronUp className={materialOpen ? "" : "collapsed"} size={25} strokeWidth={2.8} />
+          </button>
+          {materialOpen ? (
+            <div className="property-list" id={`material-${shape.id}`}>
+              <RangeProperty label="Metallic" value={gameMaterial.metallic} min={0} max={1} step={0.01} onChange={(metallic) => updateMaterial({ metallic })} workspace={workspace} disabled={locked} onInteractionActiveChange={onInteractionActiveChange} />
+              <RangeProperty label="Roughness" value={gameMaterial.roughness} min={0} max={1} step={0.01} onChange={(roughness) => updateMaterial({ roughness })} workspace={workspace} disabled={locked} onInteractionActiveChange={onInteractionActiveChange} />
+              <RangeProperty label="Opacity" value={gameMaterial.opacity} min={0.05} max={1} step={0.01} onChange={(opacity) => updateMaterial({ opacity })} workspace={workspace} disabled={locked} onInteractionActiveChange={onInteractionActiveChange} />
+              <label className="range-property">
+                <span className="range-property-header">
+                  <span className="range-property-name">Emissive</span>
+                  <input
+                    type="color"
+                    value={gameMaterial.emissive}
+                    disabled={locked}
+                    aria-label="Emissive colour"
+                    onFocus={() => onInteractionActiveChange?.(true)}
+                    onBlur={() => onInteractionActiveChange?.(false)}
+                    onChange={(event) => updateMaterial({ emissive: event.currentTarget.value })}
+                  />
+                </span>
+              </label>
+              <button
+                className={gameMaterial.doubleSided ? "inspector-action-button active" : "inspector-action-button"}
+                type="button"
+                disabled={locked}
+                aria-pressed={gameMaterial.doubleSided}
+                onClick={() => updateMaterial({ doubleSided: !gameMaterial.doubleSided })}
+              >
+                <span>Double sided</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <div className={`property-card ${propertiesOpen ? "" : "collapsed"}`}>

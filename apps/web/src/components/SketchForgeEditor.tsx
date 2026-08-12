@@ -85,6 +85,7 @@ import { appendEditorHistorySnapshot, boundedEditorHistoryState, editorHistoryEn
 import { snapShapeFootprintToVisibleGrid, visibleGridStep } from "@/lib/gridSnap";
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
+import { exportMeshesToGlb } from "@/lib/glbExport";
 import { exportMeshesToObj } from "@/lib/objExport";
 import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceFormatForFileName } from "@/lib/projectAssets";
 import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
@@ -122,7 +123,7 @@ import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset,
 export { importedShapeFromStl, importedShapeFromSvg };
 
 type TopPanel = "import" | "export" | "profile" | "settings" | null;
-type ExportFormat = "stl" | "obj" | "step" | "svg" | "skf";
+type ExportFormat = "stl" | "obj" | "glb" | "step" | "svg" | "skf";
 type DirectExportFormat = Exclude<ExportFormat, "step" | "skf">;
 type SkfHistoryLimit = EditorHistoryExportLimit;
 type SkfExportTarget = "download" | "shared";
@@ -8322,6 +8323,15 @@ export function SketchForgeEditor({
       return;
     }
     const meshes = exportable.map(meshForShape);
+    if (format === "glb") {
+      void downloadBlobFile(
+        projectExportFileName(exportName, "glb"),
+        exportMeshesToGlb(meshes.map((mesh, index) => ({ ...mesh, shape: exportable[index] }))),
+      )
+        .then((result) => finishNotice("GLB", result))
+        .catch((error: unknown) => failNotice("GLB", error));
+      return;
+    }
     if (format === "stl") {
       void downloadTextFile(projectExportFileName(exportName, "stl"), exportMeshesToStl(meshes), "model/stl")
         .then((result) => finishNotice("STL", result))
@@ -9726,6 +9736,11 @@ function TopActionPanel({
       description: "Universal 3D mesh",
       note: "A broadly compatible mesh format for modeling, rendering, and interchange.",
     },
+    glb: {
+      label: "GLB",
+      description: "Game-ready 3D asset",
+      note: "Exports a self-contained glTF 2.0 model in metres with PBR material values, normals, and automatic UV coordinates.",
+    },
     step: {
       label: "STEP",
       description: "CAD / B-Rep",
@@ -9822,7 +9837,7 @@ function TopActionPanel({
               <span className="export-scope-badge">{exportFormat === "skf" ? "Full project" : `${shapeCount} ${scopeLabel}`}</span>
             </div>
             <div className="export-format-slider" data-format={exportFormat} role="radiogroup" aria-label="Export format">
-              {(["stl", "obj", "step", "svg", "skf"] as const).map((format) => (
+              {(["stl", "obj", "glb", "step", "svg", "skf"] as const).map((format) => (
                 <button
                   key={format}
                   type="button"

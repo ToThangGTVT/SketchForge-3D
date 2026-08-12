@@ -858,6 +858,20 @@ function validateShapeDefinition(definition: Record<string, unknown>, label: str
   if ([definition.width, definition.depth, definition.height].some((value) => Math.abs(value as number) > 1e9)) {
     throw new Error(`${label} dimensions exceed the supported range`);
   }
+  if (definition.material !== undefined) {
+    const material = objectRecord(definition.material, `${label}.material`);
+    ["metallic", "roughness", "opacity"].forEach((field) => {
+      if (material[field] === undefined) return;
+      const value = finiteNumber(material[field], `${label}.material.${field}`);
+      if (value < 0 || value > 1) throw new Error(`${label}.material.${field} is outside the supported range`);
+    });
+    if (material.emissive !== undefined && (typeof material.emissive !== "string" || !/^#[0-9a-f]{6}$/i.test(material.emissive))) {
+      throw new Error(`${label}.material.emissive must be a six-digit hex colour`);
+    }
+    if (material.doubleSided !== undefined && typeof material.doubleSided !== "boolean") {
+      throw new Error(`${label}.material.doubleSided must be true or false`);
+    }
+  }
   if (definition.importedMesh || definition.groupedShapes || definition.edgeTreatmentHistory || definition.cadBrep) {
     throw new Error(`${label} contains inline package-only geometry fields`);
   }

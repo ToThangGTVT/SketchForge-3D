@@ -28,6 +28,17 @@ export type ShapeAsset = {
   hole?: boolean;
 };
 
+// Game-facing PBR values deliberately stay separate from the editor's `color`
+// field. `color` remains the backwards-compatible base colour used by existing
+// projects, while this optional block adds physically based rendering controls.
+export type GameMaterial = {
+  metallic?: number;
+  roughness?: number;
+  emissive?: string;
+  opacity?: number;
+  doubleSided?: boolean;
+};
+
 export type ProjectAssetSourceFormat = "stl" | "obj" | "svg" | "step";
 
 export type ProjectAsset = {
@@ -176,6 +187,7 @@ export type WorkplaneShape = {
   name: string;
   kind: ShapeKind;
   color: string;
+  material?: GameMaterial;
   hole?: boolean;
   x: number;
   z: number;

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added per-shape game PBR controls and GLB export with normals, automatic UV coordinates, and self-contained glTF materials.
+
 ## 0.1.0
 
 - Initial open-source alpha.

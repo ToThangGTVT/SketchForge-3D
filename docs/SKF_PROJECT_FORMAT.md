@@ -39,7 +39,7 @@ Object nodes keep stable SketchForge object IDs. Groups refer to child node IDs 
 ## What is preserved
 
 - All current native shape kinds and their editable parameters
-- Position, rotation, dimensions, mirrors, colour, solid/hole role, visibility, and lock state
+- Position, rotation, dimensions, mirrors, colour, optional PBR material values, solid/hole role, visibility, and lock state
 - Nested groups, boolean operands, subtraction results, and intersection metadata
 - Sketch points, lines, Bezier/smooth handles, disjoint profiles, reference images, and extrusion depth
 - Imported STL, SVG, and STEP sources, stored once and reused by instances

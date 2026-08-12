@@ -28,6 +28,7 @@ import type { AppThemePreference, ResolvedAppTheme } from "@/lib/appTheme";
 import type { ChallengeTutorialId } from "@/lib/challenges";
 import { cadModifierPrimitiveForBakedShape, cadTransformFromMatrix, cadTransformToMatrix } from "@/lib/cadBakeMetadata";
 import { createGearGeometry } from "@/lib/gearGeometry";
+import { gameMaterialForShape } from "@/lib/gameMaterial";
 import { parseMeasurementInput } from "@/lib/measurementUnits";
 import { createMoveDimensionOverlay, type MoveDimensionAxis, type MoveDimensionOverlayData } from "@/lib/moveDimensionLines";
 import {
@@ -859,6 +860,7 @@ function shapeTransformSignature(shape: WorkplaneShape) {
 function shapeMaterialSignature(shape: WorkplaneShape): string {
   return JSON.stringify({
     color: shape.color,
+    material: shape.material,
     hole: Boolean(shape.hole),
     imagePlate: shapeResourceId(shape.imagePlate),
     imageData: shape.imagePlate?.dataUrl ?? "",
@@ -6948,12 +6950,16 @@ function releaseSharedShapeGeometry(mesh: THREE.Mesh | THREE.LineSegments) {
 }
 
 function sharedShapeMaterial(shape: WorkplaneShape) {
+  const gameMaterial = gameMaterialForShape(shape);
+  const hole = Boolean(shape.hole);
   const key = JSON.stringify({
-    color: shape.hole ? "#b7c0c9" : shape.color,
-    transparent: Boolean(shape.hole),
-    opacity: shape.hole ? (shape.importedMesh ? 0.34 : 0.52) : 1,
-    roughness: shape.hole ? 0.88 : 0.57,
-    side: shape.importedMesh?.sourceFormat === "json" || mirroredAxisCount(shape) % 2 === 1 ? "double" : "front",
+    color: hole ? "#b7c0c9" : shape.color,
+    transparent: hole || gameMaterial.opacity < 1,
+    opacity: hole ? (shape.importedMesh ? 0.34 : 0.52) : gameMaterial.opacity,
+    roughness: hole ? 0.88 : gameMaterial.roughness,
+    metalness: hole ? 0.02 : gameMaterial.metallic,
+    emissive: hole ? "#000000" : gameMaterial.emissive,
+    side: gameMaterial.doubleSided || shape.importedMesh?.sourceFormat === "json" || mirroredAxisCount(shape) % 2 === 1 ? "double" : "front",
   });
   const cached = sharedShapeMaterialCache.get(key);
   if (cached) {
@@ -6962,12 +6968,13 @@ function sharedShapeMaterial(shape: WorkplaneShape) {
     return cached.material;
   }
   const material = new THREE.MeshStandardMaterial({
-    color: shape.hole ? "#b7c0c9" : shape.color,
-    transparent: Boolean(shape.hole),
-    opacity: shape.hole ? (shape.importedMesh ? 0.34 : 0.52) : 1,
-    roughness: shape.hole ? 0.88 : 0.57,
-    metalness: 0.02,
-    side: shape.importedMesh?.sourceFormat === "json" || mirroredAxisCount(shape) % 2 === 1 ? THREE.DoubleSide : THREE.FrontSide,
+    color: hole ? "#b7c0c9" : shape.color,
+    transparent: hole || gameMaterial.opacity < 1,
+    opacity: hole ? (shape.importedMesh ? 0.34 : 0.52) : gameMaterial.opacity,
+    roughness: hole ? 0.88 : gameMaterial.roughness,
+    metalness: hole ? 0.02 : gameMaterial.metallic,
+    emissive: hole ? "#000000" : gameMaterial.emissive,
+    side: gameMaterial.doubleSided || shape.importedMesh?.sourceFormat === "json" || mirroredAxisCount(shape) % 2 === 1 ? THREE.DoubleSide : THREE.FrontSide,
   });
   material.userData.cached = true;
   material.userData.sharedShapeMaterialKey = key;
