@@ -1,6 +1,7 @@
 import { createLocalId } from "@/lib/localIds";
 import type { WorkplaneShape } from "@/types/sketchforge";
 import { canonicalGameMaterial } from "@/lib/gameMaterial";
+import { canonicalGameAsset } from "@/lib/gameAsset";
 
 export function normalizeDegrees(value: number) {
   return ((value % 360) + 360) % 360;
@@ -161,6 +162,7 @@ export function canonicalizeShape(shape: WorkplaneShape): WorkplaneShape {
     mirrorY: shape.mirrorY || undefined,
     mirrorZ: shape.mirrorZ || undefined,
     material: canonicalGameMaterial(shape.material),
+    gameAsset: canonicalGameAsset(shape.gameAsset),
   };
   if (shape.groupedShapes) {
     next.groupedShapes = shape.groupedShapes.map(canonicalizeShape);
@@ -181,6 +183,7 @@ export function workplaneShapesEqual(a: WorkplaneShape, b: WorkplaneShape) {
     a.kind === b.kind &&
     a.color === b.color &&
     a.material === b.material &&
+    a.gameAsset === b.gameAsset &&
     a.hole === b.hole &&
     a.x === b.x &&
     a.z === b.z &&

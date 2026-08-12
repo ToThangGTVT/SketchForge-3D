@@ -872,6 +872,16 @@ function validateShapeDefinition(definition: Record<string, unknown>, label: str
       throw new Error(`${label}.material.doubleSided must be true or false`);
     }
   }
+  if (definition.gameAsset !== undefined) {
+    const gameAsset = objectRecord(definition.gameAsset, `${label}.gameAsset`);
+    if (gameAsset.collider !== undefined && !["none", "box", "sphere", "mesh"].includes(gameAsset.collider as string)) {
+      throw new Error(`${label}.gameAsset.collider is invalid`);
+    }
+    if (gameAsset.lodCount !== undefined) {
+      const lodCount = finiteNumber(gameAsset.lodCount, `${label}.gameAsset.lodCount`);
+      if (!Number.isInteger(lodCount) || lodCount < 0 || lodCount > 3) throw new Error(`${label}.gameAsset.lodCount is outside the supported range`);
+    }
+  }
   if (definition.importedMesh || definition.groupedShapes || definition.edgeTreatmentHistory || definition.cadBrep) {
     throw new Error(`${label} contains inline package-only geometry fields`);
   }
@@ -1061,6 +1071,10 @@ async function validateDocumentAndAssets(raw: unknown, files: ArchiveFiles) {
 
 async function defaultSourceImporter(asset: ProjectAsset) {
   if (asset.sourceFormat === "stl") return importedShapeFromStl(asset.name, exactArrayBuffer(asset.bytes)).importedMesh as NonNullable<WorkplaneShape["importedMesh"]>;
+  if (asset.sourceFormat === "glb") {
+    const { importedShapeFromGlb } = await import("@/lib/glbImport");
+    return (await importedShapeFromGlb(asset.name, exactArrayBuffer(asset.bytes))).importedMesh as NonNullable<WorkplaneShape["importedMesh"]>;
+  }
   if (asset.sourceFormat === "svg") return importedShapeFromSvg(asset.name, strFromU8(asset.bytes)).importedMesh as NonNullable<WorkplaneShape["importedMesh"]>;
   if (asset.sourceFormat === "step") {
     const { importedShapeFromStep } = await import("@/lib/stepImport");

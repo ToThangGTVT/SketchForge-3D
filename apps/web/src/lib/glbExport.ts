@@ -1,11 +1,12 @@
 import { gameMaterialForShape } from "@/lib/gameMaterial";
+import { gameAssetForShape } from "@/lib/gameAsset";
 import type { WorkplaneShape } from "@/types/sketchforge";
 
 export type GlbExportMesh = {
   name: string;
   vertices: readonly (readonly [number, number, number])[];
   faces: readonly (readonly [number, number, number])[];
-  shape: Pick<WorkplaneShape, "color" | "material">;
+  shape: Pick<WorkplaneShape, "color" | "material" | "gameAsset">;
 };
 
 type Accessor = {
@@ -104,6 +105,7 @@ export function exportMeshesToGlb(meshes: readonly GlbExportMesh[]): Blob {
   const materialByKey = new Map<string, number>();
   const gltfMeshes: Array<Record<string, unknown>> = [];
   const nodes: Array<Record<string, unknown>> = [];
+  const rootNodeIds: number[] = [];
 
   const addAccessor = (values: number[], componentType: 5123 | 5125 | 5126, type: Accessor["type"], target: 34962 | 34963, min?: number[], max?: number[]) => {
     const bytes = typedBytes(values, componentType);
@@ -112,7 +114,7 @@ export function exportMeshesToGlb(meshes: readonly GlbExportMesh[]): Blob {
     return accessors.push({ bufferView, componentType, count: values.length / (type === "SCALAR" ? 1 : type === "VEC2" ? 2 : 3), type, ...(min ? { min } : {}), ...(max ? { max } : {}) }) - 1;
   };
 
-  meshes.forEach((source) => {
+  const addGltfMesh = (source: GlbExportMesh) => {
     const data = meshAttributes(source);
     if (!data.indices.length) return;
     const min = [Infinity, Infinity, Infinity];
@@ -143,15 +145,35 @@ export function exportMeshesToGlb(meshes: readonly GlbExportMesh[]): Blob {
       }) - 1;
       materialByKey.set(key, material);
     }
-    const mesh = gltfMeshes.push({ name: source.name, primitives: [{ attributes: { POSITION: position, NORMAL: normal, TEXCOORD_0: texcoord }, indices, material }] }) - 1;
-    nodes.push({ name: source.name, mesh });
+    return gltfMeshes.push({ name: source.name, primitives: [{ attributes: { POSITION: position, NORMAL: normal, TEXCOORD_0: texcoord }, indices, material }] }) - 1;
+  };
+
+  meshes.forEach((source) => {
+    const mesh = addGltfMesh(source);
+    if (mesh === undefined) return;
+    const gameAsset = gameAssetForShape(source.shape);
+    const node: Record<string, unknown> = {
+      name: source.name,
+      mesh,
+      extras: { sketchforge: { collider: gameAsset.collider, triangleCount: source.faces.length } },
+    };
+    const lodIds: number[] = [];
+    for (let level = 1; level <= gameAsset.lodCount; level += 1) {
+      const stride = 2 ** level;
+      const faces = source.faces.filter((_, index) => index % stride === 0);
+      if (faces.length < 1 || faces.length === source.faces.length) continue;
+      const lodMesh = addGltfMesh({ ...source, name: `${source.name}_LOD${level}`, faces });
+      if (lodMesh !== undefined) lodIds.push(nodes.push({ name: `${source.name}_LOD${level}`, mesh: lodMesh, extras: { sketchforge: { lod: level } } }) - 1);
+    }
+    if (lodIds.length) node.extensions = { MSFT_lod: { ids: lodIds } };
+    rootNodeIds.push(nodes.push(node) - 1);
   });
 
   const binaryLength = binaryChunks.reduce((total, chunk) => total + chunk.byteLength, 0);
   const binary = new Uint8Array(binaryLength);
   let binaryOffset = 0;
   binaryChunks.forEach((chunk) => { binary.set(chunk, binaryOffset); binaryOffset += chunk.byteLength; });
-  const json = JSON.stringify({ asset: { version: "2.0", generator: "SketchForge" }, scene: 0, scenes: [{ nodes: nodes.map((_, index) => index) }], nodes, meshes: gltfMeshes, materials, buffers: [{ byteLength: binaryLength }], bufferViews, accessors });
+  const json = JSON.stringify({ asset: { version: "2.0", generator: "SketchForge" }, extensionsUsed: nodes.some((node) => node.extensions) ? ["MSFT_lod"] : undefined, scene: 0, scenes: [{ nodes: rootNodeIds }], nodes, meshes: gltfMeshes, materials, buffers: [{ byteLength: binaryLength }], bufferViews, accessors });
   const jsonBytes = new TextEncoder().encode(json);
   const jsonLength = align4(jsonBytes.byteLength);
   const totalLength = 12 + 8 + jsonLength + 8 + binaryLength;

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added per-shape game PBR controls and GLB export with normals, automatic UV coordinates, and self-contained glTF materials.
+- Added GLB import, game collider/LOD metadata, and topology validation before GLB export.
 
 ## 0.1.0
 

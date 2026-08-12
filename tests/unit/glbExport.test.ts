@@ -21,4 +21,18 @@ describe("GLB export", () => {
     expect(json.meshes[0].primitives[0].attributes).toMatchObject({ POSITION: expect.any(Number), NORMAL: expect.any(Number), TEXCOORD_0: expect.any(Number) });
     expect(json.materials[0].pbrMetallicRoughness).toMatchObject({ metallicFactor: 0.7, roughnessFactor: 0.25 });
   });
+
+  it("carries collider metadata and creates requested game LODs", async () => {
+    const blob = exportMeshesToGlb([{
+      name: "LOD mesh",
+      vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]],
+      faces: [[0, 1, 2], [1, 3, 2]],
+      shape: { color: "#ffffff", gameAsset: { collider: "box", lodCount: 1 } },
+    }]);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const jsonLength = new DataView(bytes.buffer).getUint32(12, true);
+    const json = JSON.parse(new TextDecoder().decode(bytes.slice(20, 20 + jsonLength)));
+    expect(json.extensionsUsed).toContain("MSFT_lod");
+    expect(json.nodes.find((node: { name: string }) => node.name === "LOD mesh").extras.sketchforge.collider).toBe("box");
+  });
 });

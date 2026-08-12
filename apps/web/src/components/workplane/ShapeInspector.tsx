@@ -25,6 +25,7 @@ import { displayStepFromMillimeters, displayToMillimeters, formatMeasurementNumb
 import { resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { normalizeSketchRevolveSettings } from "@/lib/sketchRevolve";
 import { gameMaterialForShape } from "@/lib/gameMaterial";
+import { gameAssetForShape } from "@/lib/gameAsset";
 import type { GearType, GridSize, MeasurementAccuracy, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 const GRID_SIZES: GridSize[] = ["Off", "0.1 mm", "0.25 mm", "0.5 mm", "1.0 mm", "2.0 mm", "5.0 mm", "Brick"];
@@ -361,6 +362,7 @@ export function ShapeInspector({
   const inspectorRef = useRef<HTMLElement>(null);
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [materialOpen, setMaterialOpen] = useState(true);
+  const [gameAssetOpen, setGameAssetOpen] = useState(true);
   const [gearTeethOpen, setGearTeethOpen] = useState(true);
   const [gearHelixOpen, setGearHelixOpen] = useState(true);
   const [colorOpen, setColorOpen] = useState(false);
@@ -368,6 +370,8 @@ export function ShapeInspector({
   const customColorInputRef = useRef<HTMLInputElement>(null);
   const gameMaterial = gameMaterialForShape(shape);
   const updateMaterial = (patch: Partial<typeof gameMaterial>) => onUpdate({ material: { ...gameMaterial, ...patch } });
+  const gameAsset = gameAssetForShape(shape);
+  const updateGameAsset = (patch: Partial<typeof gameAsset>) => onUpdate({ gameAsset: { ...gameAsset, ...patch } });
 
   useEffect(() => () => onInteractionActiveChange?.(false), [onInteractionActiveChange]);
   useEffect(() => {
@@ -533,6 +537,21 @@ export function ShapeInspector({
               >
                 <span>Double sided</span>
               </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!shape.hole ? (
+        <div className={`property-card ${gameAssetOpen ? "" : "collapsed"}`}>
+          <button className="property-card-header" type="button" aria-expanded={gameAssetOpen} aria-controls={`game-asset-${shape.id}`} onClick={() => setGameAssetOpen((open) => !open)}>
+            <span>Game Asset</span>
+            <ChevronUp className={gameAssetOpen ? "" : "collapsed"} size={25} strokeWidth={2.8} />
+          </button>
+          {gameAssetOpen ? (
+            <div className="property-list" id={`game-asset-${shape.id}`}>
+              <SelectProperty type="select" label="Collider" value={gameAsset.collider} options={["none", "box", "sphere", "mesh"]} onChange={(collider) => updateGameAsset({ collider: collider as typeof gameAsset.collider })} disabled={locked} />
+              <RangeProperty label="LOD Levels" value={gameAsset.lodCount} min={0} max={3} step={1} onChange={(lodCount) => updateGameAsset({ lodCount: Math.round(lodCount) })} workspace={workspace} disabled={locked} onInteractionActiveChange={onInteractionActiveChange} />
             </div>
           ) : null}
         </div>

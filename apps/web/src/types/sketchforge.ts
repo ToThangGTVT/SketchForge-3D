@@ -39,7 +39,16 @@ export type GameMaterial = {
   doubleSided?: boolean;
 };
 
-export type ProjectAssetSourceFormat = "stl" | "obj" | "svg" | "step";
+export type GameCollider = "none" | "box" | "sphere" | "mesh";
+
+// Optional, export-only metadata. It leaves the CAD model and its boolean
+// source intact while supplying the downstream game-engine pipeline.
+export type GameAssetSettings = {
+  collider?: GameCollider;
+  lodCount?: number;
+};
+
+export type ProjectAssetSourceFormat = "stl" | "obj" | "glb" | "svg" | "step";
 
 export type ProjectAsset = {
   id: string;
@@ -188,6 +197,7 @@ export type WorkplaneShape = {
   kind: ShapeKind;
   color: string;
   material?: GameMaterial;
+  gameAsset?: GameAssetSettings;
   hole?: boolean;
   x: number;
   z: number;
@@ -225,7 +235,7 @@ export type WorkplaneShape = {
     baseDepth: number;
     baseHeight: number;
     triangleCount: number;
-    sourceFormat: "stl" | "obj" | "svg" | "json" | "step";
+    sourceFormat: "stl" | "obj" | "glb" | "svg" | "json" | "step";
     // IndexedDB persistence uses this only in compact stored shape records.
     // Runtime editor shapes are hydrated with the full immutable mesh resource.
     storageResourceId?: string;

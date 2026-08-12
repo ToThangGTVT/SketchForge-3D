@@ -86,6 +86,7 @@ import { snapShapeFootprintToVisibleGrid, visibleGridStep } from "@/lib/gridSnap
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
 import { exportMeshesToGlb } from "@/lib/glbExport";
+import { validateTriangleMesh } from "@/lib/gameAsset";
 import { exportMeshesToObj } from "@/lib/objExport";
 import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceFormatForFileName } from "@/lib/projectAssets";
 import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
@@ -8324,6 +8325,11 @@ export function SketchForgeEditor({
     }
     const meshes = exportable.map(meshForShape);
     if (format === "glb") {
+      const invalid = meshes.map(validateTriangleMesh).find((result) => result.degenerateTriangles > 0 || result.nonManifoldEdges > 0);
+      if (invalid) {
+        setNotice(`GLB export stopped: mesh has ${invalid.degenerateTriangles} degenerate triangle(s) and ${invalid.nonManifoldEdges} non-manifold edge(s). Repair or rebuild the shape first.`);
+        return;
+      }
       void downloadBlobFile(
         projectExportFileName(exportName, "glb"),
         exportMeshesToGlb(meshes.map((mesh, index) => ({ ...mesh, shape: exportable[index] }))),
@@ -8499,7 +8505,8 @@ export function SketchForgeEditor({
       const sourceFormat = sourceFormatForFileName(file.name) ?? (file.type === "image/svg+xml" ? "svg" : null);
       const isStep = sourceFormat === "step";
       const isSvg = sourceFormat === "svg";
-      if (!sourceFormat || sourceFormat === "obj" || (!isStep && !isSvg && !importExtensionSupported(file.name))) {
+      const isGlb = sourceFormat === "glb";
+      if (!sourceFormat || sourceFormat === "obj" || (!isStep && !isSvg && !isGlb && !importExtensionSupported(file.name))) {
         failures.push({ fileName: file.name, reason: "Unsupported file type" });
         continue;
       }
@@ -8512,6 +8519,9 @@ export function SketchForgeEditor({
         if (isStep) {
           const { importedShapeFromStep } = await import("@/lib/stepImport");
           nextShape = await importedShapeFromStep(file.name, buffer);
+        } else if (isGlb) {
+          const { importedShapeFromGlb } = await import("@/lib/glbImport");
+          nextShape = await importedShapeFromGlb(file.name, buffer);
         } else if (isSvg) {
           nextShape = importedShapeFromSvg(file.name, new TextDecoder().decode(bytes));
         } else {
@@ -9061,7 +9071,7 @@ export function SketchForgeEditor({
         className="hidden-file-input"
         type="file"
         multiple
-        accept=".stl,.step,.stp,.svg,image/svg+xml"
+        accept=".stl,.glb,.step,.stp,.svg,image/svg+xml"
         onChange={(event) => {
           if (event.currentTarget.files) {
             selectFiles(event.currentTarget.files);
@@ -9803,7 +9813,7 @@ function TopActionPanel({
             }}
           >
             <ToolbarImportIcon />
-            <strong>Drop STL, STEP, or SVG files</strong>
+            <strong>Drop STL, GLB, STEP, or SVG files</strong>
             <span>or click to choose from your computer</span>
           </button>
         </div>
