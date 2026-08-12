@@ -18,9 +18,11 @@
   --workplane: #9adcf0;
   --workplane-soft: rgba(154, 220, 240, 0.28);
   --shadow: 0 2px 6px rgba(35, 55, 75, 0.12);
-  --font-ui: "Avenir Next", Avenir, "Helvetica Neue", Arial, sans-serif;
+  --font-ui: "Google Sans", "Avenir Next", Avenir, "Helvetica Neue", Arial, sans-serif;
   --editor-toolbar-height: 108px;
   --editor-toolbar-tools-height: 76px;
+  /* Keep in sync with TOOLBAR_GLYPH_SIZE in src/components/icons.tsx */
+  --toolbar-glyph-size: 32px;
 }
 
 * {
@@ -98,7 +100,9 @@ button {
   height: var(--editor-toolbar-height);
   background: #f2f6f8;
   border-bottom: 1px solid #d2dce5;
-  box-shadow: 0 1px 2px rgba(32, 54, 72, 0.05);
+  box-shadow:
+    0 2px 4px rgba(32, 54, 72, 0.1),
+    0 6px 16px rgba(32, 54, 72, 0.12);
 }
 
 .editor-loading-tabs {
@@ -164,7 +168,7 @@ button {
 
 .editor-loading-section-label {
   position: absolute;
-  top: 7px;
+  top: 58px;
   left: 50%;
   width: min(64px, calc(100% - 18px));
   height: 7px;
@@ -174,7 +178,7 @@ button {
 
 .editor-loading-section-controls {
   position: absolute;
-  top: 28px;
+  top: 5px;
   left: 50%;
   display: flex;
   transform: translateX(-50%);
@@ -415,7 +419,7 @@ button {
   background: #0e69f1;
   border-bottom: 0;
   box-shadow: none;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-ui);
 }
 
 .dashboard-brand {
@@ -1172,8 +1176,8 @@ button {
 }
 
 .editor-home-control svg {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .dashboard-settings-panel {
@@ -1586,7 +1590,10 @@ button {
   overflow: visible;
   background: #f4f7f9;
   border-bottom: 1px solid #d2dce5;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 1px 2px rgba(32, 54, 72, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 2px 4px rgba(32, 54, 72, 0.1),
+    0 6px 16px rgba(32, 54, 72, 0.12);
 }
 
 .edge-modifier-panel {
@@ -2235,14 +2242,20 @@ button {
 
 .visibility-dropdown-help {
   display: flex;
+  flex-wrap: wrap;
   padding: 7px 8px 1px;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 3px 5px;
   color: #5d7284;
   font-size: 9px;
   font-weight: 700;
   line-height: 1.35;
+  text-align: center;
+}
+
+/* Each hint stays on one line; the row wraps between hints instead of overflowing. */
+.visibility-dropdown-help > span {
   white-space: nowrap;
 }
 
@@ -2259,11 +2272,11 @@ button {
 }
 
 .toolbar-section-label {
-  order: 1;
+  order: 2;
   height: 24px;
-  padding: 6px 9px 0;
+  padding: 2px 9px 6px;
   color: #607589;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-ui);
   font-size: 12px;
   font-weight: 800;
   line-height: 16px;
@@ -2276,12 +2289,12 @@ button {
 }
 
 .toolbar-section-tools {
-  order: 2;
+  order: 1;
   display: flex;
   height: 52px;
   align-items: center;
   justify-content: center;
-  padding: 0 3px 1px;
+  padding: 1px 3px 0;
 }
 
 .toolbar-spacer {
@@ -2453,8 +2466,8 @@ button {
 .toolbar-icon .toolbar-sprite-icon,
 .toolbar-icon .vector-toolbar-sprite-icon,
 .toolbar-icon .toolbar-command-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .toolbar-command-icon {
@@ -2508,14 +2521,14 @@ button {
 }
 
 .toolbar-icon .toolbar-user-art-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .toolbar-icon .toolbar-art-toolbar-chamfer,
 .toolbar-icon .toolbar-art-toolbar-fillet {
-  width: 34px;
-  height: 34px;
+  width: calc(var(--toolbar-glyph-size) * 0.79);
+  height: calc(var(--toolbar-glyph-size) * 0.79);
 }
 
 .toolbar-icon.disabled .toolbar-command-icon {
@@ -2627,8 +2640,8 @@ button {
 }
 
 .shape-menu-trigger .vector-toolbar-sprite-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .shape-menu-dropdown {
@@ -2718,7 +2731,7 @@ button {
   gap: 5px;
   padding: 0;
   color: #244057;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-ui);
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
@@ -2747,24 +2760,24 @@ button {
 }
 
 .action-buttons button .vector-toolbar-sprite-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .action-buttons .action-icon-button .vector-toolbar-sprite-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .action-buttons .action-icon-button .toolbar-command-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
   object-fit: contain;
 }
 
 .action-buttons .action-icon-button .toolbar-user-art-icon {
-  width: 43px;
-  height: 43px;
+  width: var(--toolbar-glyph-size);
+  height: var(--toolbar-glyph-size);
 }
 
 .top-dropdown {
@@ -6996,7 +7009,10 @@ html[data-theme="dark"] .sketch-toolbar-ribbon {
   color: #d2e0ea;
   background: #1a2630;
   border-color: #30424f;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    0 6px 16px rgba(0, 0, 0, 0.34);
 }
 
 html[data-theme="dark"] .editor-nav-group,

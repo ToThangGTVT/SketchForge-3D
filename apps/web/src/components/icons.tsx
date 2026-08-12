@@ -11,8 +11,12 @@ type SpriteRect = {
 const toolbarSprite = "assets/sketchforge/toolbar-sprite.svg?v=2";
 const vectorToolbarSprite = "assets/sketchforge/vector-toolbar-icons.svg?v=1";
 
+// Sprite icons size themselves inline, so the CSS --toolbar-glyph-size variable
+// cannot reach them. Keep this value in sync with that variable in globals.css.
+const TOOLBAR_GLYPH_SIZE = 32;
+
 function ToolbarSpriteIcon({ rect, className, style }: IconProps & { rect: SpriteRect }) {
-  const size = 35;
+  const size = TOOLBAR_GLYPH_SIZE;
   const scale = size / rect.height;
 
   return (
@@ -36,7 +40,7 @@ function ToolbarSpriteIcon({ rect, className, style }: IconProps & { rect: Sprit
 }
 
 function VectorToolbarSpriteIcon({ rect, className, style }: IconProps & { rect: SpriteRect }) {
-  const size = 35;
+  const size = TOOLBAR_GLYPH_SIZE;
   const scale = size / rect.height;
 
   return (
