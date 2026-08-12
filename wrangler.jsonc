@@ -1,0 +1,14 @@
+{
+  // Static-assets-only Worker: SketchForge's editor and geometry kernel run
+  // entirely in the browser, so the deployment is the `npm run export` output
+  // with no Worker script behind it. The Node-backed API routes under
+  // apps/web/src/app/api are dropped by the Cloudflare build command because
+  // Workers has no filesystem; the UI already guards those features behind
+  // NEXT_PUBLIC_STATIC_EXPORT.
+  "name": "sketchforge",
+  "compatibility_date": "2026-08-12",
+  "assets": {
+    "directory": "./apps/web/.next-export",
+    "not_found_handling": "404-page"
+  }
+}
